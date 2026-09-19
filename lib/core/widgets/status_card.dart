@@ -2,11 +2,7 @@ import 'package:flutter/material.dart';
 
 /// Reusable card widget for displaying a titled section with custom content.
 class StatusCard extends StatelessWidget {
-  const StatusCard({
-    super.key,
-    required this.title,
-    required this.child,
-  });
+  const StatusCard({super.key, required this.title, required this.child});
 
   final String title;
   final Widget child;
@@ -22,10 +18,7 @@ class StatusCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(
-              title,
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
+            Text(title, style: Theme.of(context).textTheme.titleLarge),
             const SizedBox(height: 12),
             child,
           ],

@@ -51,6 +51,7 @@ class MainActivity : FlutterActivity() {
         private val MESH_LINK_SERVICE = ParcelUuid.fromString("6f4b6d65-7368-4c69-6e6b-000000000002")
         private val REQUEST_CHARACTERISTIC = java.util.UUID.fromString("6f4b6d65-7368-4c69-6e6b-000000000003")
         private val RESPONSE_CHARACTERISTIC = java.util.UUID.fromString("6f4b6d65-7368-4c69-6e6b-000000000004")
+        private val MESSAGE_CHARACTERISTIC = java.util.UUID.fromString("6f4b6d65-7368-4c69-6e6b-000000000005")
         private val CLIENT_CONFIG = java.util.UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
     }
 
@@ -63,11 +64,21 @@ class MainActivity : FlutterActivity() {
     private var scanning = false
     private var advertising = false
     private val devicesByIdentity = mutableMapOf<String, BluetoothDevice>()
+    private val deviceNamesByIdentity = mutableMapOf<String, String>()
     private val pendingIncoming = mutableMapOf<String, BluetoothDevice>()
+    private var connectedServerDevice: BluetoothDevice? = null
+    private var connectedServerId: String? = null
     private var gattServer: BluetoothGattServer? = null
     private var clientGatt: BluetoothGatt? = null
     private var clientTargetId: String? = null
     private var isReceiverRegistered = false
+    private var connectionTimeoutRunnable: Runnable? = null
+
+    private fun sendEvent(event: Map<String, Any?>) {
+        handler.post {
+            eventSink?.success(event)
+        }
+    }
 
     private val bluetoothStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -76,10 +87,11 @@ class MainActivity : FlutterActivity() {
                 when (state) {
                     BluetoothAdapter.STATE_OFF -> {
                         stopDiscovery()
-                        eventSink?.success(mapOf("type" to "bluetoothStateChanged", "state" to "disabled"))
+                        disconnect(clientTargetId ?: connectedServerId)
+                        sendEvent(mapOf("type" to "bluetoothStateChanged", "state" to "disabled"))
                     }
                     BluetoothAdapter.STATE_ON -> {
-                        eventSink?.success(mapOf("type" to "bluetoothStateChanged", "state" to "enabled"))
+                        sendEvent(mapOf("type" to "bluetoothStateChanged", "state" to "enabled"))
                     }
                     BluetoothAdapter.STATE_TURNING_OFF -> {
                         stopDiscovery()
@@ -134,6 +146,11 @@ class MainActivity : FlutterActivity() {
             "connect" -> connect(call.argument<String>("deviceId"), result)
             "acceptConnection" -> acceptConnection(call.argument<String>("deviceId"), result)
             "rejectConnection" -> rejectConnection(call.argument<String>("deviceId"), result)
+            "sendMessage" -> {
+                val deviceId = call.argument<String>("deviceId")
+                val payload = call.argument<String>("payload")
+                sendMessage(deviceId, payload, result)
+            }
             "disconnect" -> {
                 disconnect(call.argument<String>("deviceId"))
                 result.success(null)
@@ -396,7 +413,8 @@ class MainActivity : FlutterActivity() {
             }
 
             devicesByIdentity[idString] = result.device
-            eventSink?.success(mapOf(
+            deviceNamesByIdentity[idString] = displayName
+            sendEvent(mapOf(
                 "type" to "device",
                 "id" to idString,
                 "name" to displayName,
@@ -407,7 +425,7 @@ class MainActivity : FlutterActivity() {
 
         override fun onScanFailed(errorCode: Int) {
             stopDiscovery()
-            eventSink?.success(mapOf("type" to "error", "message" to "Bluetooth scan failed (code $errorCode)."))
+            sendEvent(mapOf("type" to "error", "message" to "Bluetooth scan failed (code $errorCode)."))
         }
     }
 
@@ -418,7 +436,7 @@ class MainActivity : FlutterActivity() {
 
         override fun onStartFailure(errorCode: Int) {
             advertising = false
-            eventSink?.success(mapOf("type" to "error", "message" to "MeshLink advertising could not start (code $errorCode)."))
+            sendEvent(mapOf("type" to "error", "message" to "MeshLink advertising could not start (code $errorCode)."))
         }
     }
 
@@ -444,12 +462,20 @@ class MainActivity : FlutterActivity() {
                 BluetoothGattCharacteristic.PROPERTY_WRITE,
                 BluetoothGattCharacteristic.PERMISSION_WRITE)
             val response = BluetoothGattCharacteristic(RESPONSE_CHARACTERISTIC,
-                BluetoothGattCharacteristic.PROPERTY_INDICATE,
+                BluetoothGattCharacteristic.PROPERTY_INDICATE or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
                 BluetoothGattCharacteristic.PERMISSION_READ)
             response.addDescriptor(BluetoothGattDescriptor(CLIENT_CONFIG,
                 BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE))
+            
+            val message = BluetoothGattCharacteristic(MESSAGE_CHARACTERISTIC,
+                BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE or BluetoothGattCharacteristic.PROPERTY_INDICATE or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
+                BluetoothGattCharacteristic.PERMISSION_WRITE or BluetoothGattCharacteristic.PERMISSION_READ)
+            message.addDescriptor(BluetoothGattDescriptor(CLIENT_CONFIG,
+                BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE))
+
             service.addCharacteristic(request)
             service.addCharacteristic(response)
+            service.addCharacteristic(message)
             server.addService(service)
         }
     }
@@ -471,12 +497,20 @@ class MainActivity : FlutterActivity() {
         } else {
             device.connectGatt(this, false, clientCallback)
         }
-        handler.postDelayed({
+
+        // 15-second connection timeout guard
+        connectionTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        connectionTimeoutRunnable = Runnable {
             if (clientGatt != null && clientTargetId == deviceId) {
-                eventSink?.success(mapOf("type" to "connectionFailed", "deviceId" to deviceId, "message" to "Unable to connect to this device. Please make sure it is nearby and available."))
+                sendEvent(mapOf(
+                    "type" to "connectionFailed",
+                    "deviceId" to deviceId,
+                    "message" to "Unable to connect to this device. Please make sure it is nearby and available."
+                ))
                 disconnect(deviceId)
             }
-        }, 15_000)
+        }.also { handler.postDelayed(it, 15_000) }
+
         result.success(mapOf("started" to true))
     }
 
@@ -484,8 +518,10 @@ class MainActivity : FlutterActivity() {
     private fun acceptConnection(deviceId: String?, result: MethodChannel.Result) {
         val device = deviceId?.let { pendingIncoming.remove(it) }
         if (device == null) { result.success(false); return }
+        connectedServerDevice = device
+        connectedServerId = deviceId
         notifyResponse(device, 1)
-        eventSink?.success(mapOf("type" to "connected", "deviceId" to deviceId))
+        sendEvent(mapOf("type" to "connected", "deviceId" to deviceId))
         result.success(true)
     }
 
@@ -504,14 +540,59 @@ class MainActivity : FlutterActivity() {
     }
 
     @SuppressLint("MissingPermission")
+    private fun sendMessage(deviceId: String?, payload: String?, result: MethodChannel.Result) {
+        if (payload == null || deviceId == null) {
+            result.success(mapOf("sent" to false, "message" to "Invalid message payload"))
+            return
+        }
+        val bytes = payload.toByteArray(StandardCharsets.UTF_8)
+        
+        // If we are client connected to remote server
+        if (clientGatt != null && clientTargetId == deviceId) {
+            val char = clientGatt?.getService(MESH_LINK_SERVICE.uuid)?.getCharacteristic(MESSAGE_CHARACTERISTIC)
+            if (char == null) {
+                result.success(mapOf("sent" to false, "message" to "Message characteristic unavailable."))
+                return
+            }
+            char.value = bytes
+            char.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            val success = clientGatt?.writeCharacteristic(char) == true
+            result.success(mapOf("sent" to success))
+            return
+        }
+
+        // If we are server connected to remote client
+        if (connectedServerDevice != null && connectedServerId == deviceId) {
+            val char = gattServer?.getService(MESH_LINK_SERVICE.uuid)?.getCharacteristic(MESSAGE_CHARACTERISTIC)
+            if (char == null) {
+                result.success(mapOf("sent" to false, "message" to "Server message characteristic unavailable."))
+                return
+            }
+            char.value = bytes
+            val success = gattServer?.notifyCharacteristicChanged(connectedServerDevice, char, true) == true
+            result.success(mapOf("sent" to success))
+            return
+        }
+
+        result.success(mapOf("sent" to false, "message" to "Device is not currently connected."))
+    }
+
+    @SuppressLint("MissingPermission")
     private fun disconnect(deviceId: String?) {
+        connectionTimeoutRunnable?.let { handler.removeCallbacks(it) }
+        connectionTimeoutRunnable = null
         clientGatt?.disconnect()
         clientGatt?.close()
         clientGatt = null
         clientTargetId = null
+        if (connectedServerDevice != null && (deviceId == null || connectedServerId == deviceId)) {
+            connectedServerDevice?.let { gattServer?.cancelConnection(it) }
+            connectedServerDevice = null
+            connectedServerId = null
+        }
         if (deviceId != null) {
             pendingIncoming.remove(deviceId)?.let { gattServer?.cancelConnection(it) }
-            eventSink?.success(mapOf("type" to "disconnected", "deviceId" to deviceId))
+            sendEvent(mapOf("type" to "disconnected", "deviceId" to deviceId))
         }
     }
 
@@ -519,6 +600,7 @@ class MainActivity : FlutterActivity() {
         @SuppressLint("MissingPermission")
         override fun onDescriptorWriteRequest(device: BluetoothDevice, requestId: Int, descriptor: BluetoothGattDescriptor,
             preparedWrite: Boolean, responseNeeded: Boolean, offset: Int, value: ByteArray?) {
+            descriptor.value = value
             if (responseNeeded) gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
         }
 
@@ -528,15 +610,26 @@ class MainActivity : FlutterActivity() {
             if (characteristic.uuid == REQUEST_CHARACTERISTIC && value != null) {
                 val id = String(value, StandardCharsets.US_ASCII)
                 pendingIncoming[id] = device
-                eventSink?.success(mapOf("type" to "incomingRequest", "deviceId" to id, "name" to "MeshLink device"))
+                val name = deviceNamesByIdentity[id] ?: "MeshLink device"
+                sendEvent(mapOf("type" to "incomingRequest", "deviceId" to id, "name" to name))
+            } else if (characteristic.uuid == MESSAGE_CHARACTERISTIC && value != null) {
+                val payload = String(value, StandardCharsets.UTF_8)
+                sendEvent(mapOf("type" to "messageReceived", "payload" to payload))
             }
             if (responseNeeded) gattServer?.sendResponse(device, requestId, BluetoothGatt.GATT_SUCCESS, 0, null)
         }
 
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
             if (newState == BluetoothGatt.STATE_DISCONNECTED) {
-                val id = pendingIncoming.entries.firstOrNull { it.value.address == device.address }?.key
-                if (id != null) eventSink?.success(mapOf("type" to "disconnected", "deviceId" to id))
+                val id = if (connectedServerDevice?.address == device.address) connectedServerId
+                         else pendingIncoming.entries.firstOrNull { it.value.address == device.address }?.key
+                if (id != null) {
+                    if (connectedServerDevice?.address == device.address) {
+                        connectedServerDevice = null
+                        connectedServerId = null
+                    }
+                    sendEvent(mapOf("type" to "disconnected", "deviceId" to id))
+                }
             }
         }
     }
@@ -544,33 +637,106 @@ class MainActivity : FlutterActivity() {
     private val clientCallback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            if (newState == BluetoothGatt.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) gatt.discoverServices()
-            else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
-                clientTargetId?.let { eventSink?.success(mapOf("type" to "disconnected", "deviceId" to it)) }
-                gatt.close(); if (clientGatt == gatt) clientGatt = null
+            if (newState == BluetoothGatt.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+                    gatt.requestMtu(512)
+                } else {
+                    gatt.discoverServices()
+                }
+            } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                connectionTimeoutRunnable?.let { handler.removeCallbacks(it) }
+                connectionTimeoutRunnable = null
+                clientTargetId?.let { sendEvent(mapOf("type" to "disconnected", "deviceId" to it)) }
+                gatt.close()
+                if (clientGatt == gatt) clientGatt = null
             }
         }
+
+        @SuppressLint("MissingPermission")
+        override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            gatt.discoverServices()
+        }
+
         @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            val response = gatt.getService(MESH_LINK_SERVICE.uuid)?.getCharacteristic(RESPONSE_CHARACTERISTIC)
-            if (status != BluetoothGatt.GATT_SUCCESS || response == null) { clientTargetId?.let { disconnect(it) }; return }
+            val service = gatt.getService(MESH_LINK_SERVICE.uuid)
+            val response = service?.getCharacteristic(RESPONSE_CHARACTERISTIC)
+            if (status != BluetoothGatt.GATT_SUCCESS || response == null) {
+                clientTargetId?.let { disconnect(it) }
+                return
+            }
+            // Step 1: Enable notifications on RESPONSE_CHARACTERISTIC
             gatt.setCharacteristicNotification(response, true)
-            response.getDescriptor(CLIENT_CONFIG)?.let { descriptor -> descriptor.value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE; gatt.writeDescriptor(descriptor) }
+            val responseDesc = response.getDescriptor(CLIENT_CONFIG)
+            if (responseDesc != null) {
+                responseDesc.value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+                gatt.writeDescriptor(responseDesc)
+            } else {
+                // If descriptor is missing, proceed to step 2
+                enableMessageNotification(gatt)
+            }
         }
+
         @SuppressLint("MissingPermission")
-        override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+        private fun enableMessageNotification(gatt: BluetoothGatt) {
+            val message = gatt.getService(MESH_LINK_SERVICE.uuid)?.getCharacteristic(MESSAGE_CHARACTERISTIC)
+            if (message != null) {
+                gatt.setCharacteristicNotification(message, true)
+                val msgDesc = message.getDescriptor(CLIENT_CONFIG)
+                if (msgDesc != null) {
+                    msgDesc.value = BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+                    gatt.writeDescriptor(msgDesc)
+                    return
+                }
+            }
+            sendConnectionRequest(gatt)
+        }
+
+        @SuppressLint("MissingPermission")
+        private fun sendConnectionRequest(gatt: BluetoothGatt) {
             val request = gatt.getService(MESH_LINK_SERVICE.uuid)?.getCharacteristic(REQUEST_CHARACTERISTIC) ?: return
             request.value = meshLinkId().toByteArray(StandardCharsets.US_ASCII)
             gatt.writeCharacteristic(request)
-            clientTargetId?.let { eventSink?.success(mapOf("type" to "waitingForAcceptance", "deviceId" to it)) }
+            clientTargetId?.let { sendEvent(mapOf("type" to "waitingForAcceptance", "deviceId" to it)) }
         }
-        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            val id = clientTargetId ?: return
-            if (characteristic.uuid == RESPONSE_CHARACTERISTIC && characteristic.value?.firstOrNull()?.toInt() == 1) eventSink?.success(mapOf("type" to "connected", "deviceId" to id))
-            else {
-                eventSink?.success(mapOf("type" to "connectionFailed", "deviceId" to id, "message" to "Connection request was rejected."))
-                gatt.disconnect()
+
+        @SuppressLint("MissingPermission")
+        override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+            if (descriptor.characteristic?.uuid == RESPONSE_CHARACTERISTIC) {
+                // Step 2: Now that RESPONSE descriptor is written, write MESSAGE descriptor sequentially
+                enableMessageNotification(gatt)
+            } else if (descriptor.characteristic?.uuid == MESSAGE_CHARACTERISTIC) {
+                // Step 3: Now that both descriptors are written, transmit connection request
+                sendConnectionRequest(gatt)
             }
+        }
+
+        private fun handleCharacteristicChanged(uuid: java.util.UUID, value: ByteArray?) {
+            val id = clientTargetId ?: return
+            if (uuid == RESPONSE_CHARACTERISTIC && value?.firstOrNull()?.toInt() == 1) {
+                // Cancel timeout immediately upon connection
+                connectionTimeoutRunnable?.let { handler.removeCallbacks(it) }
+                connectionTimeoutRunnable = null
+                sendEvent(mapOf("type" to "connected", "deviceId" to id))
+            } else if (uuid == MESSAGE_CHARACTERISTIC && value != null) {
+                val payload = String(value, StandardCharsets.UTF_8)
+                sendEvent(mapOf("type" to "messageReceived", "payload" to payload))
+            } else if (uuid == RESPONSE_CHARACTERISTIC) {
+                connectionTimeoutRunnable?.let { handler.removeCallbacks(it) }
+                connectionTimeoutRunnable = null
+                sendEvent(mapOf("type" to "connectionFailed", "deviceId" to id, "message" to "Connection request was rejected."))
+                clientGatt?.disconnect()
+            }
+        }
+
+        @Deprecated("Deprecated in Java")
+        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
+            handleCharacteristicChanged(characteristic.uuid, characteristic.value)
+        }
+
+        // Android 13+ (API 33) overload
+        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) {
+            handleCharacteristicChanged(characteristic.uuid, value)
         }
     }
 
@@ -590,4 +756,5 @@ class MainActivity : FlutterActivity() {
         super.onDestroy()
     }
 }
+
 

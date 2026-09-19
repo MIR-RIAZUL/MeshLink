@@ -19,7 +19,8 @@ class AppStrings {
   static const noDevicesFound = 'No devices found';
   static const discoverPrompt = 'Start discovering nearby devices';
   static const discoverButton = 'Discover Devices';
-  static const discoverSnack = 'Device discovery will be available in the next update.';
+  static const discoverSnack =
+      'Device discovery will be available in the next update.';
 
   // Mock device data
   static const mockDevice1Name = 'MIR-RIAZUL';
@@ -27,7 +28,8 @@ class AppStrings {
 
   // Messages screen
   static const messagesEmptyTitle = 'No conversations yet';
-  static const messagesEmptySubtitle = 'Connect to a nearby device\nto start communicating.';
+  static const messagesEmptySubtitle =
+      'Connect to a nearby device\nto start communicating.';
 
   // Settings screen
   static const settingsTitle = 'Settings';

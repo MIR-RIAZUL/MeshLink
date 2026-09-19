@@ -10,15 +10,28 @@ import 'package:meshlink/features/devices/data/services/device_discovery_service
 import 'package:meshlink/features/devices/providers/device_discovery_controller.dart';
 import 'package:meshlink/features/devices/providers/device_connection_controller.dart';
 
+import 'package:meshlink/features/messages/data/services/message_storage_service.dart';
+import 'package:meshlink/features/messages/data/services/mesh_messaging_service.dart';
+import 'package:meshlink/features/messages/providers/messaging_controller.dart';
+
 void main() {
   runApp(const MeshLinkApp());
 }
 
 /// Root widget that sets up theme and navigation.
 class MeshLinkApp extends StatelessWidget {
-  const MeshLinkApp({super.key, this.service});
+  const MeshLinkApp({
+    super.key,
+    this.service,
+    this.storageService,
+    this.messagingService,
+    this.messagingController,
+  });
 
   final DeviceDiscoveryService? service;
+  final MessageStorageService? storageService;
+  final MeshMessagingService? messagingService;
+  final MessagingController? messagingController;
 
   @override
   Widget build(BuildContext context) {
@@ -28,16 +41,30 @@ class MeshLinkApp extends StatelessWidget {
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: ThemeMode.system,
-      home: MainScaffold(service: service),
+      home: MainScaffold(
+        service: service,
+        storageService: storageService,
+        messagingService: messagingService,
+        messagingController: messagingController,
+      ),
     );
   }
 }
 
 /// Scaffold containing bottom navigation and the selected feature screen.
 class MainScaffold extends StatefulWidget {
-  const MainScaffold({super.key, this.service});
+  const MainScaffold({
+    super.key,
+    this.service,
+    this.storageService,
+    this.messagingService,
+    this.messagingController,
+  });
 
   final DeviceDiscoveryService? service;
+  final MessageStorageService? storageService;
+  final MeshMessagingService? messagingService;
+  final MessagingController? messagingController;
 
   @override
   State<MainScaffold> createState() => _MainScaffoldState();
@@ -45,22 +72,49 @@ class MainScaffold extends StatefulWidget {
 
 class _MainScaffoldState extends State<MainScaffold> {
   int _selectedIndex = 0;
+  late final DeviceDiscoveryService _service;
   late final DeviceDiscoveryController _discoveryController;
   late final DeviceConnectionController _connectionController;
+  late final MessageStorageService _storageService;
+  late final MeshMessagingService _messagingService;
+  late final MessagingController _messagingController;
 
   @override
   void initState() {
     super.initState();
-    final service = widget.service ?? AndroidBleDiscoveryService();
-    _discoveryController = DeviceDiscoveryController(service);
-    _connectionController = DeviceConnectionController(service);
-    _discoveryController.initialize();
+    _service = widget.service ?? AndroidBleDiscoveryService();
+    _discoveryController = DeviceDiscoveryController(_service);
+    _connectionController = DeviceConnectionController(_service);
+
+    _storageService = widget.storageService ?? InMemoryMessageStorageService();
+    _messagingService =
+        widget.messagingService ??
+        BleMeshMessagingService(
+          discoveryService: _service,
+          storageService: _storageService,
+          localId: _discoveryController.localIdentity.id,
+        );
+    _messagingController =
+        widget.messagingController ??
+        MessagingController(
+          messagingService: _messagingService,
+          localId: _discoveryController.localIdentity.id,
+        );
+
+    _initControllers();
+  }
+
+  Future<void> _initControllers() async {
+    await _discoveryController.initialize();
+    _messagingController.setLocalId(_discoveryController.localIdentity.id);
   }
 
   @override
   void dispose() {
     _discoveryController.dispose();
     _connectionController.dispose();
+    _messagingController.dispose();
+    _messagingService.dispose();
     super.dispose();
   }
 
@@ -74,9 +128,20 @@ class _MainScaffoldState extends State<MainScaffold> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: <Widget>[
-        HomeScreen(controller: _discoveryController, connectionController: _connectionController),
-        DevicesScreen(controller: _discoveryController, connectionController: _connectionController),
-        const MessagesScreen(),
+        HomeScreen(
+          controller: _discoveryController,
+          connectionController: _connectionController,
+        ),
+        DevicesScreen(
+          controller: _discoveryController,
+          connectionController: _connectionController,
+          messagingController: _messagingController,
+        ),
+        MessagesScreen(
+          messagingController: _messagingController,
+          connectionController: _connectionController,
+          discoveryController: _discoveryController,
+        ),
         SettingsScreen(controller: _discoveryController),
       ][_selectedIndex],
       bottomNavigationBar: BottomNavigationBar(
@@ -87,7 +152,10 @@ class _MainScaffoldState extends State<MainScaffold> {
           BottomNavigationBarItem(icon: Icon(Icons.home), label: 'Home'),
           BottomNavigationBarItem(icon: Icon(Icons.devices), label: 'Devices'),
           BottomNavigationBarItem(icon: Icon(Icons.message), label: 'Messages'),
-          BottomNavigationBarItem(icon: Icon(Icons.settings), label: 'Settings'),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.settings),
+            label: 'Settings',
+          ),
         ],
       ),
     );
@@ -101,4 +169,3 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => const MeshLinkApp();
 }
-

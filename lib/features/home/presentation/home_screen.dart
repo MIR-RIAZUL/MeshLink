@@ -7,7 +7,11 @@ import 'package:meshlink/features/devices/providers/device_discovery_controller.
 import 'package:meshlink/features/devices/providers/device_connection_controller.dart';
 
 class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key, required this.controller, required this.connectionController});
+  const HomeScreen({
+    super.key,
+    required this.controller,
+    required this.connectionController,
+  });
 
   final DeviceDiscoveryController controller;
   final DeviceConnectionController connectionController;
@@ -27,7 +31,8 @@ class HomeScreen extends StatelessWidget {
                 // Header
                 Text(
                   AppStrings.appName,
-                  style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold),
+                  style: Theme.of(context).textTheme.headlineMedium
+                      ?.copyWith(fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 4),
                 Text(
@@ -45,13 +50,18 @@ class HomeScreen extends StatelessWidget {
                     onAction: controller.enableBluetooth,
                   ),
                   const SizedBox(height: 16),
-                ] else if (btState == BluetoothState.permissionRequired || btState == BluetoothState.permissionPermanentlyDenied) ...[
+                ] else if (btState == BluetoothState.permissionRequired ||
+                    btState == BluetoothState.permissionPermanentlyDenied) ...[
                   _BluetoothRequiredCard(
                     title: 'Bluetooth Permission Required',
-                    description: btState == BluetoothState.permissionPermanentlyDenied
+                    description:
+                        btState == BluetoothState.permissionPermanentlyDenied
                         ? 'Bluetooth permissions were permanently denied. Please enable them in Android Settings.'
                         : 'Nearby-device permissions are needed to scan and advertise for MeshLink users.',
-                    buttonLabel: btState == BluetoothState.permissionPermanentlyDenied ? 'Open Settings' : 'Grant Permission',
+                    buttonLabel:
+                        btState == BluetoothState.permissionPermanentlyDenied
+                        ? 'Open Settings'
+                        : 'Grant Permission',
                     onAction: controller.requestPermissions,
                   ),
                   const SizedBox(height: 16),
@@ -62,12 +72,20 @@ class HomeScreen extends StatelessWidget {
                       padding: const EdgeInsets.all(16),
                       child: Row(
                         children: [
-                          Icon(Icons.error_outline, color: Theme.of(context).colorScheme.error),
+                          Icon(
+                            Icons.error_outline,
+                            color: Theme.of(context).colorScheme.error,
+                          ),
                           const SizedBox(width: 12),
                           Expanded(
                             child: Text(
-                              controller.errorMessage ?? 'Bluetooth LE is unavailable on this device.',
-                              style: TextStyle(color: Theme.of(context).colorScheme.onErrorContainer),
+                              controller.errorMessage ??
+                                  'Bluetooth LE is unavailable on this device.',
+                              style: TextStyle(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onErrorContainer,
+                              ),
                             ),
                           ),
                         ],
@@ -80,8 +98,11 @@ class HomeScreen extends StatelessWidget {
                 // Live Bluetooth & Discovery Indicator Card
                 Card(
                   elevation: 0,
-                  color: Theme.of(context).colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest
+                      .withValues(alpha: 0.5),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
                   child: Padding(
                     padding: const EdgeInsets.all(16),
                     child: Column(
@@ -89,8 +110,12 @@ class HomeScreen extends StatelessWidget {
                         Row(
                           children: [
                             Icon(
-                              btState == BluetoothState.enabled ? Icons.bluetooth : Icons.bluetooth_disabled,
-                              color: btState == BluetoothState.enabled ? Colors.green : Colors.red,
+                              btState == BluetoothState.enabled
+                                  ? Icons.bluetooth
+                                  : Icons.bluetooth_disabled,
+                              color: btState == BluetoothState.enabled
+                                  ? Colors.green
+                                  : Colors.red,
                               size: 24,
                             ),
                             const SizedBox(width: 12),
@@ -98,11 +123,18 @@ class HomeScreen extends StatelessWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text('Bluetooth', style: Theme.of(context).textTheme.titleSmall),
+                                  Text(
+                                    'Bluetooth',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleSmall,
+                                  ),
                                   Text(
                                     _bluetoothStateLabel(btState),
                                     style: TextStyle(
-                                      color: btState == BluetoothState.enabled ? Colors.green : Colors.grey[700],
+                                      color: btState == BluetoothState.enabled
+                                          ? Colors.green
+                                          : Colors.grey[700],
                                       fontWeight: FontWeight.w600,
                                       fontSize: 13,
                                     ),
@@ -117,7 +149,9 @@ class HomeScreen extends StatelessWidget {
                           children: [
                             Icon(
                               Icons.radar,
-                              color: controller.isDiscovering ? Colors.blue : Colors.grey,
+                              color: controller.isDiscovering
+                                  ? Colors.blue
+                                  : Colors.grey,
                               size: 24,
                             ),
                             const SizedBox(width: 12),
@@ -125,11 +159,20 @@ class HomeScreen extends StatelessWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  Text('MeshLink Discovery', style: Theme.of(context).textTheme.titleSmall),
                                   Text(
-                                    controller.isDiscovering ? 'Active (Scanning & Advertising)' : 'Inactive',
+                                    'MeshLink Discovery',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleSmall,
+                                  ),
+                                  Text(
+                                    controller.isDiscovering
+                                        ? 'Active (Scanning & Advertising)'
+                                        : 'Inactive',
                                     style: TextStyle(
-                                      color: controller.isDiscovering ? Colors.blue : Colors.grey[700],
+                                      color: controller.isDiscovering
+                                          ? Colors.blue
+                                          : Colors.grey[700],
                                       fontWeight: FontWeight.w600,
                                       fontSize: 13,
                                     ),
@@ -141,7 +184,9 @@ class HomeScreen extends StatelessWidget {
                               const SizedBox(
                                 width: 16,
                                 height: 16,
-                                child: CircularProgressIndicator(strokeWidth: 2),
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
                               ),
                           ],
                         ),
@@ -157,13 +202,29 @@ class HomeScreen extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const _KeyValueRow(keyLabel: AppStrings.internetLabel, value: AppStrings.internetValue),
-                      _KeyValueRow(keyLabel: 'My MeshLink ID', value: controller.localIdentity.id),
-                      _KeyValueRow(keyLabel: 'My Display Name', value: controller.localIdentity.name),
-                      _KeyValueRow(keyLabel: AppStrings.nearbyDevicesLabel, value: '${controller.devices.length} nearby'),
+                      const _KeyValueRow(
+                        keyLabel: AppStrings.internetLabel,
+                        value: AppStrings.internetValue,
+                      ),
+                      _KeyValueRow(
+                        keyLabel: 'My MeshLink ID',
+                        value: controller.localIdentity.id,
+                      ),
+                      _KeyValueRow(
+                        keyLabel: 'My Display Name',
+                        value: controller.localIdentity.name,
+                      ),
+                      _KeyValueRow(
+                        keyLabel: AppStrings.nearbyDevicesLabel,
+                        value: '${controller.devices.length} nearby',
+                      ),
                       _KeyValueRow(
                         keyLabel: 'Direct Link',
-                        value: connectionController.status == ConnectionStatus.connected ? 'Connected' : 'Not Connected',
+                        value:
+                            connectionController.status ==
+                                ConnectionStatus.connected
+                            ? 'Connected'
+                            : 'Not Connected',
                       ),
                     ],
                   ),
@@ -174,7 +235,9 @@ class HomeScreen extends StatelessWidget {
                 if (btState == BluetoothState.enabled)
                   Center(
                     child: PrimaryButton(
-                      label: controller.isDiscovering ? 'Pause Discovery' : 'Resume Discovery',
+                      label: controller.isDiscovering
+                          ? 'Pause Discovery'
+                          : 'Resume Discovery',
                       onPressed: controller.isDiscovering
                           ? controller.stopDiscovery
                           : controller.startDiscovery,
@@ -192,7 +255,8 @@ class HomeScreen extends StatelessWidget {
     BluetoothState.enabled => 'Enabled',
     BluetoothState.disabled => 'Disabled',
     BluetoothState.permissionRequired => 'Permission Required',
-    BluetoothState.permissionPermanentlyDenied => 'Permission Permanently Denied',
+    BluetoothState.permissionPermanentlyDenied =>
+      'Permission Permanently Denied',
     BluetoothState.unavailable => 'Unavailable',
   };
 }
@@ -222,12 +286,17 @@ class _BluetoothRequiredCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                const Icon(Icons.bluetooth_searching, color: Colors.indigo, size: 28),
+                const Icon(
+                  Icons.bluetooth_searching,
+                  color: Colors.indigo,
+                  size: 28,
+                ),
                 const SizedBox(width: 12),
                 Expanded(
                   child: Text(
                     title,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
@@ -235,7 +304,8 @@ class _BluetoothRequiredCard extends StatelessWidget {
             const SizedBox(height: 10),
             Text(
               description,
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.black87),
+              style: Theme.of(context).textTheme.bodyMedium
+                  ?.copyWith(color: Colors.black87),
             ),
             const SizedBox(height: 16),
             SizedBox(
@@ -243,11 +313,16 @@ class _BluetoothRequiredCard extends StatelessWidget {
               child: ElevatedButton.icon(
                 style: ElevatedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 12),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
                 ),
                 onPressed: onAction,
                 icon: const Icon(Icons.power_settings_new),
-                label: Text(buttonLabel, style: const TextStyle(fontWeight: FontWeight.bold)),
+                label: Text(
+                  buttonLabel,
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
               ),
             ),
           ],
@@ -269,10 +344,13 @@ class _KeyValueRow extends StatelessWidget {
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
           Text(keyLabel, style: Theme.of(context).textTheme.bodyMedium),
-          Text(value, style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontWeight: FontWeight.w600)),
+          Text(
+            value,
+            style: Theme.of(context).textTheme.bodyMedium
+                ?.copyWith(fontWeight: FontWeight.w600),
+          ),
         ],
       ),
     );
   }
 }
-

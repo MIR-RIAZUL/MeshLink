@@ -3,12 +3,20 @@ import 'package:meshlink/features/devices/data/models/nearby_device.dart';
 import 'package:meshlink/features/devices/data/services/device_discovery_service.dart';
 import 'package:meshlink/features/devices/providers/device_discovery_controller.dart';
 import 'package:meshlink/features/devices/providers/device_connection_controller.dart';
+import 'package:meshlink/features/messages/providers/messaging_controller.dart';
+import 'package:meshlink/features/messages/presentation/conversation_screen.dart';
 
 class DevicesScreen extends StatelessWidget {
-  const DevicesScreen({super.key, required this.controller, required this.connectionController});
+  const DevicesScreen({
+    super.key,
+    required this.controller,
+    required this.connectionController,
+    required this.messagingController,
+  });
 
   final DeviceDiscoveryController controller;
   final DeviceConnectionController connectionController;
+  final MessagingController messagingController;
 
   @override
   Widget build(BuildContext context) {
@@ -30,7 +38,11 @@ class DevicesScreen extends StatelessWidget {
         ],
       ),
       body: AnimatedBuilder(
-        animation: Listenable.merge([controller, connectionController]),
+        animation: Listenable.merge([
+          controller,
+          connectionController,
+          messagingController,
+        ]),
         builder: (context, _) {
           final btState = controller.bluetoothState;
           final incoming = connectionController.incomingDevice;
@@ -50,7 +62,8 @@ class DevicesScreen extends StatelessWidget {
                   onPressed: controller.enableBluetooth,
                 ),
                 const SizedBox(height: 16),
-              ] else if (btState == BluetoothState.permissionRequired || btState == BluetoothState.permissionPermanentlyDenied) ...[
+              ] else if (btState == BluetoothState.permissionRequired ||
+                  btState == BluetoothState.permissionPermanentlyDenied) ...[
                 _ActionBanner(
                   icon: Icons.security,
                   iconColor: Colors.orange,
@@ -58,15 +71,22 @@ class DevicesScreen extends StatelessWidget {
                   message: btState == BluetoothState.permissionPermanentlyDenied
                       ? 'Permission permanently denied. Open Android Settings to grant access.'
                       : 'MeshLink needs nearby device permissions to discover other phones.',
-                  buttonLabel: btState == BluetoothState.permissionPermanentlyDenied ? 'Open Settings' : 'Grant Permission',
+                  buttonLabel:
+                      btState == BluetoothState.permissionPermanentlyDenied
+                      ? 'Open Settings'
+                      : 'Grant Permission',
                   onPressed: controller.requestPermissions,
                 ),
                 const SizedBox(height: 16),
               ] else if (controller.isDiscovering) ...[
                 Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 14,
+                    vertical: 10,
+                  ),
                   decoration: BoxDecoration(
-                    color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.3),
+                    color: Theme.of(context).colorScheme.primaryContainer
+                        .withValues(alpha: 0.3),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: Row(
@@ -100,10 +120,13 @@ class DevicesScreen extends StatelessWidget {
                       children: [
                         Text(
                           'Incoming Connection Request',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.bold),
                         ),
                         const SizedBox(height: 6),
-                        Text('${incoming.name} (${incoming.id}) wants to connect directly with your device.'),
+                        Text(
+                          '${incoming.name} (${incoming.id}) wants to connect directly with your device.',
+                        ),
                         const SizedBox(height: 12),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.end,
@@ -133,15 +156,18 @@ class DevicesScreen extends StatelessWidget {
                   child: Text(
                     'Nearby MeshLink Users (${devices.length})',
                     style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
+                      fontWeight: FontWeight.bold,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
                   ),
                 ),
-                ...devices.map((device) => _DeviceCard(
-                      device: device,
-                      connectionController: connectionController,
-                    )),
+                ...devices.map(
+                  (device) => _DeviceCard(
+                    device: device,
+                    connectionController: connectionController,
+                    messagingController: messagingController,
+                  ),
+                ),
               ] else if (btState == BluetoothState.enabled) ...[
                 Padding(
                   padding: const EdgeInsets.symmetric(vertical: 48),
@@ -149,11 +175,16 @@ class DevicesScreen extends StatelessWidget {
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.radar, size: 56, color: Colors.grey.withValues(alpha: 0.6)),
+                        Icon(
+                          Icons.radar,
+                          size: 56,
+                          color: Colors.grey.withValues(alpha: 0.6),
+                        ),
                         const SizedBox(height: 16),
                         Text(
                           'No nearby MeshLink users found.',
-                          style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(fontWeight: FontWeight.w600),
                         ),
                         const SizedBox(height: 6),
                         const Text(
@@ -178,25 +209,28 @@ class _DeviceCard extends StatelessWidget {
   const _DeviceCard({
     required this.device,
     required this.connectionController,
+    required this.messagingController,
   });
 
   final NearbyDevice device;
   final DeviceConnectionController connectionController;
+  final MessagingController messagingController;
 
   @override
   Widget build(BuildContext context) {
     final connected = connectionController.isConnected(device.id);
     final active = connectionController.deviceId == device.id;
-    final retryable = active &&
+    final retryable =
+        active &&
         (connectionController.status == ConnectionStatus.failed ||
             connectionController.status == ConnectionStatus.lost);
     final label = connected
         ? 'Disconnect'
         : retryable
-            ? 'Reconnect'
-            : active
-                ? _connectionLabel(connectionController.status)
-                : 'Connect';
+        ? 'Reconnect'
+        : active
+        ? _connectionLabel(connectionController.status)
+        : 'Connect';
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -204,13 +238,29 @@ class _DeviceCard extends StatelessWidget {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        onTap: connected
+            ? () {
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (context) => ConversationScreen(
+                      peerId: device.id,
+                      peerName: device.name,
+                      messagingController: messagingController,
+                      connectionController: connectionController,
+                    ),
+                  ),
+                );
+              }
+            : null,
         leading: CircleAvatar(
           backgroundColor: connected
               ? Colors.green.withValues(alpha: 0.2)
               : Theme.of(context).colorScheme.primaryContainer,
           child: Icon(
             Icons.smartphone,
-            color: connected ? Colors.green : Theme.of(context).colorScheme.primary,
+            color: connected
+                ? Colors.green
+                : Theme.of(context).colorScheme.primary,
           ),
         ),
         title: Row(
@@ -229,7 +279,11 @@ class _DeviceCard extends StatelessWidget {
               ),
               child: Text(
                 device.id,
-                style: const TextStyle(fontSize: 11, fontFamily: 'monospace', fontWeight: FontWeight.bold),
+                style: const TextStyle(
+                  fontSize: 11,
+                  fontFamily: 'monospace',
+                  fontWeight: FontWeight.bold,
+                ),
               ),
             ),
           ],
@@ -249,10 +303,10 @@ class _DeviceCard extends StatelessWidget {
               const SizedBox(width: 6),
               Text(
                 connected
-                    ? 'Connected'
+                    ? 'Connected — Tap to Chat'
                     : active
-                        ? _connectionLabel(connectionController.status)
-                        : 'Nearby',
+                    ? _connectionLabel(connectionController.status)
+                    : 'Nearby',
                 style: TextStyle(
                   fontSize: 12,
                   color: connected ? Colors.green : Colors.grey[700],
@@ -262,24 +316,57 @@ class _DeviceCard extends StatelessWidget {
             ],
           ),
         ),
-        trailing: ElevatedButton(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: connected
-                ? Colors.red.withValues(alpha: 0.1)
-                : Theme.of(context).colorScheme.primary,
-            foregroundColor: connected
-                ? Colors.red
-                : Theme.of(context).colorScheme.onPrimary,
-            elevation: 0,
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-          ),
-          onPressed: active && !connected && !retryable
-              ? null
-              : () => connected
-                  ? connectionController.disconnect(device.id)
-                  : connectionController.connect(device),
-          child: Text(label, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (connected)
+              IconButton(
+                icon: const Icon(Icons.chat, color: Colors.green),
+                tooltip: 'Open Chat',
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute<void>(
+                      builder: (context) => ConversationScreen(
+                        peerId: device.id,
+                        peerName: device.name,
+                        messagingController: messagingController,
+                        connectionController: connectionController,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: connected
+                    ? Colors.red.withValues(alpha: 0.1)
+                    : Theme.of(context).colorScheme.primary,
+                foregroundColor: connected
+                    ? Colors.red
+                    : Theme.of(context).colorScheme.onPrimary,
+                elevation: 0,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              onPressed: active && !connected && !retryable
+                  ? null
+                  : () => connected
+                        ? connectionController.disconnect(device.id)
+                        : connectionController.connect(device),
+              child: Text(
+                label,
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -320,7 +407,8 @@ class _ActionBanner extends StatelessWidget {
                 Expanded(
                   child: Text(
                     title,
-                    style: Theme.of(context).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
+                    style: Theme.of(context).textTheme.titleMedium
+                        ?.copyWith(fontWeight: FontWeight.bold),
                   ),
                 ),
               ],
@@ -351,4 +439,3 @@ String _connectionLabel(ConnectionStatus status) => switch (status) {
   ConnectionStatus.lost => 'Lost',
   ConnectionStatus.disconnected => 'Connect',
 };
-
