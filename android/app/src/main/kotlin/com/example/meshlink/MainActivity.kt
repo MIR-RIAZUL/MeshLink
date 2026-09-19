@@ -3,7 +3,6 @@ package com.example.meshlink
 import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
-import android.bluetooth.BluetoothManager
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
@@ -12,6 +11,7 @@ import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothGattServer
 import android.bluetooth.BluetoothGattServerCallback
 import android.bluetooth.BluetoothGattService
+import android.bluetooth.BluetoothManager
 import android.bluetooth.le.AdvertiseCallback
 import android.bluetooth.le.AdvertiseData
 import android.bluetooth.le.AdvertiseSettings
@@ -21,19 +21,25 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelUuid
+import android.provider.Settings
 import android.util.Base64
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
+import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
 
 class MainActivity : FlutterActivity() {
@@ -41,7 +47,7 @@ class MainActivity : FlutterActivity() {
         private const val METHOD_CHANNEL = "meshlink/device_discovery"
         private const val EVENT_CHANNEL = "meshlink/device_discovery_events"
         private const val REQUEST_NEARBY_PERMISSIONS = 42
-        private const val SCAN_DURATION_MS = 20_000L
+        private const val REQUEST_ENABLE_BT = 43
         private val MESH_LINK_SERVICE = ParcelUuid.fromString("6f4b6d65-7368-4c69-6e6b-000000000002")
         private val REQUEST_CHARACTERISTIC = java.util.UUID.fromString("6f4b6d65-7368-4c69-6e6b-000000000003")
         private val RESPONSE_CHARACTERISTIC = java.util.UUID.fromString("6f4b6d65-7368-4c69-6e6b-000000000004")
@@ -51,6 +57,7 @@ class MainActivity : FlutterActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private var eventSink: EventChannel.EventSink? = null
     private var pendingStartResult: MethodChannel.Result? = null
+    private var pendingEnableResult: MethodChannel.Result? = null
     private var scanner: BluetoothLeScanner? = null
     private var advertiser: BluetoothLeAdvertiser? = null
     private var scanning = false
@@ -60,6 +67,27 @@ class MainActivity : FlutterActivity() {
     private var gattServer: BluetoothGattServer? = null
     private var clientGatt: BluetoothGatt? = null
     private var clientTargetId: String? = null
+    private var isReceiverRegistered = false
+
+    private val bluetoothStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action == BluetoothAdapter.ACTION_STATE_CHANGED) {
+                val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+                when (state) {
+                    BluetoothAdapter.STATE_OFF -> {
+                        stopDiscovery()
+                        eventSink?.success(mapOf("type" to "bluetoothStateChanged", "state" to "disabled"))
+                    }
+                    BluetoothAdapter.STATE_ON -> {
+                        eventSink?.success(mapOf("type" to "bluetoothStateChanged", "state" to "enabled"))
+                    }
+                    BluetoothAdapter.STATE_TURNING_OFF -> {
+                        stopDiscovery()
+                    }
+                }
+            }
+        }
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -75,11 +103,29 @@ class MainActivity : FlutterActivity() {
                     eventSink = null
                 }
             })
+
+        if (!isReceiverRegistered) {
+            val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
+            registerReceiver(bluetoothStateReceiver, filter)
+            isReceiverRegistered = true
+        }
     }
 
     private fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
         when (call.method) {
+            "getBluetoothState" -> result.success(getBluetoothStateMap())
             "checkAvailability" -> result.success(checkAvailability())
+            "requestEnableBluetooth" -> requestEnableBluetooth(result)
+            "openAppSettings" -> {
+                openAppSettings()
+                result.success(true)
+            }
+            "getLocalIdentity" -> result.success(getLocalIdentityMap())
+            "setDisplayName" -> {
+                val name = call.argument<String>("name") ?: ""
+                setDisplayName(name)
+                result.success(true)
+            }
             "startDiscovery" -> requestPermissionsThenStart(result)
             "stopDiscovery" -> {
                 stopDiscovery()
@@ -96,6 +142,32 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun getBluetoothStateMap(): Map<String, Any> {
+        val adapter = bluetoothAdapter()
+        if (adapter == null) {
+            return mapOf(
+                "state" to "unavailable",
+                "message" to "Bluetooth is not supported on this device."
+            )
+        }
+        if (!hasNearbyPermissions()) {
+            return mapOf(
+                "state" to "permissionRequired",
+                "message" to "Bluetooth permissions are required for MeshLink discovery."
+            )
+        }
+        if (!adapter.isEnabled) {
+            return mapOf(
+                "state" to "disabled",
+                "message" to "Bluetooth is disabled. Please turn Bluetooth ON."
+            )
+        }
+        return mapOf(
+            "state" to "enabled",
+            "message" to "Bluetooth is ready."
+        )
+    }
+
     private fun checkAvailability(): Map<String, Any> {
         val adapter = bluetoothAdapter()
             ?: return mapOf("available" to false, "message" to "Bluetooth is not supported on this device.")
@@ -106,6 +178,91 @@ class MainActivity : FlutterActivity() {
             return mapOf("available" to false, "message" to "This device does not support Bluetooth LE advertising required by MeshLink discovery.")
         }
         return mapOf("available" to true)
+    }
+
+    private fun requestEnableBluetooth(result: MethodChannel.Result) {
+        val adapter = bluetoothAdapter()
+        if (adapter == null) {
+            result.success(false)
+            return
+        }
+        if (adapter.isEnabled) {
+            result.success(true)
+            return
+        }
+        pendingEnableResult = result
+        try {
+            val enableBtIntent = Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE)
+            startActivityForResult(enableBtIntent, REQUEST_ENABLE_BT)
+        } catch (e: Exception) {
+            try {
+                val intent = Intent(Settings.ACTION_BLUETOOTH_SETTINGS)
+                startActivity(intent)
+                result.success(true)
+            } catch (e2: Exception) {
+                result.success(false)
+            }
+        }
+    }
+
+    private fun openAppSettings() {
+        try {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", packageName, null)
+            }
+            startActivity(intent)
+        } catch (e: Exception) {
+            val intent = Intent(Settings.ACTION_SETTINGS)
+            startActivity(intent)
+        }
+    }
+
+    private fun getLocalIdentityMap(): Map<String, String> {
+        return mapOf(
+            "id" to meshLinkId(),
+            "name" to getDisplayName()
+        )
+    }
+
+    private fun getDisplayName(): String {
+        val preferences = getSharedPreferences("meshlink", Context.MODE_PRIVATE)
+        return preferences.getString("display_name", "MeshLink User") ?: "MeshLink User"
+    }
+
+    private fun setDisplayName(name: String) {
+        val trimmed = name.trim()
+        val finalName = if (trimmed.isEmpty()) "MeshLink User" else trimmed
+        val preferences = getSharedPreferences("meshlink", Context.MODE_PRIVATE)
+        preferences.edit().putString("display_name", finalName).apply()
+        if (advertising) {
+            startAdvertising()
+        }
+    }
+
+    private fun meshLinkId(): String {
+        val preferences = getSharedPreferences("meshlink", Context.MODE_PRIVATE)
+        preferences.getString("mesh_id", null)?.let { return it }
+        val randomBytes = ByteArray(3).also { SecureRandom().nextBytes(it) }
+        val hex = randomBytes.joinToString("") { "%02X".format(it) }
+        val id = "ML-$hex"
+        preferences.edit().putString("mesh_id", id).apply()
+        return id
+    }
+
+    private fun meshLinkIdentityPayload(): ByteArray {
+        val id = meshLinkId()
+        val name = getDisplayName()
+        val idBytes = id.toByteArray(StandardCharsets.US_ASCII)
+        val nameBytes = name.toByteArray(StandardCharsets.UTF_8)
+        val maxNameLen = (20 - idBytes.size).coerceAtLeast(0)
+        val trimmedNameBytes = if (nameBytes.size > maxNameLen) nameBytes.copyOf(maxNameLen) else nameBytes
+        
+        val payload = ByteArray(idBytes.size + trimmedNameBytes.size)
+        System.arraycopy(idBytes, 0, payload, 0, idBytes.size)
+        if (trimmedNameBytes.isNotEmpty()) {
+            System.arraycopy(trimmedNameBytes, 0, payload, idBytes.size, trimmedNameBytes.size)
+        }
+        return payload
     }
 
     private fun requestPermissionsThenStart(result: MethodChannel.Result) {
@@ -137,6 +294,7 @@ class MainActivity : FlutterActivity() {
         }
         result.success(mapOf(
             "started" to false,
+            "permanentlyDenied" to permanentlyDenied,
             "message" to if (permanentlyDenied)
                 "Nearby-device permission was permanently denied. Enable it in Android Settings to discover MeshLink devices."
             else
@@ -144,9 +302,26 @@ class MainActivity : FlutterActivity() {
         ))
     }
 
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_ENABLE_BT) {
+            val result = pendingEnableResult
+            pendingEnableResult = null
+            val isEnabled = bluetoothAdapter()?.isEnabled == true
+            result?.success(isEnabled)
+            if (isEnabled) {
+                eventSink?.success(mapOf("type" to "bluetoothStateChanged", "state" to "enabled"))
+            }
+        }
+    }
+
     @SuppressLint("MissingPermission")
     private fun beginDiscovery(result: MethodChannel.Result) {
-        val adapter = bluetoothAdapter()!!
+        val adapter = bluetoothAdapter()
+        if (adapter == null || !adapter.isEnabled) {
+            result.success(mapOf("started" to false, "message" to "Bluetooth is not enabled."))
+            return
+        }
         scanner = adapter.bluetoothLeScanner
         advertiser = adapter.bluetoothLeAdvertiser
         if (scanner == null || advertiser == null) {
@@ -156,19 +331,28 @@ class MainActivity : FlutterActivity() {
         stopDiscovery()
         ensureGattServer()
         val filter = ScanFilter.Builder().setServiceUuid(MESH_LINK_SERVICE).build()
-        val settings = ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build()
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
         scanner!!.startScan(listOf(filter), settings, scanCallback)
         scanning = true
         startAdvertising()
-        handler.postDelayed(scanTimeout, SCAN_DURATION_MS)
         result.success(mapOf("started" to true))
     }
 
     @SuppressLint("MissingPermission")
     private fun startAdvertising() {
+        if (advertiser == null) {
+            advertiser = bluetoothAdapter()?.bluetoothLeAdvertiser
+        }
+        if (advertiser == null) return
+        if (advertising) {
+            try { advertiser?.stopAdvertising(advertiseCallback) } catch (_: Exception) {}
+            advertising = false
+        }
         val data = AdvertiseData.Builder()
             .addServiceUuid(MESH_LINK_SERVICE)
-            .addServiceData(MESH_LINK_SERVICE, meshLinkIdentity())
+            .addServiceData(MESH_LINK_SERVICE, meshLinkIdentityPayload())
             .setIncludeDeviceName(false)
             .build()
         val settings = AdvertiseSettings.Builder()
@@ -181,30 +365,42 @@ class MainActivity : FlutterActivity() {
 
     @SuppressLint("MissingPermission")
     private fun stopDiscovery() {
-        handler.removeCallbacks(scanTimeout)
-        if (scanning) scanner?.stopScan(scanCallback)
-        if (advertising) advertiser?.stopAdvertising(advertiseCallback)
+        if (scanning) {
+            try { scanner?.stopScan(scanCallback) } catch (_: Exception) {}
+        }
+        if (advertising) {
+            try { advertiser?.stopAdvertising(advertiseCallback) } catch (_: Exception) {}
+        }
         scanning = false
         advertising = false
-    }
-
-    private val scanTimeout = Runnable {
-        if (scanning) {
-            stopDiscovery()
-            eventSink?.success(mapOf("type" to "completed"))
-        }
     }
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val serviceData = result.scanRecord?.getServiceData(MESH_LINK_SERVICE) ?: return
-            // Service data is the app-specific, rotating-ready identity; no hardware address is exposed to Flutter.
-            val id = Base64.encodeToString(serviceData, Base64.NO_WRAP)
-            devicesByIdentity[id] = result.device
+            if (serviceData.size < 9) return
+
+            val idString = String(serviceData.copyOfRange(0, 9), StandardCharsets.US_ASCII)
+            val myId = meshLinkId()
+            if (idString.equals(myId, ignoreCase = true)) {
+                return
+            }
+
+            var displayName = "MeshLink User"
+            if (serviceData.size > 9) {
+                val nameBytes = serviceData.copyOfRange(9, serviceData.size)
+                val parsedName = String(nameBytes, StandardCharsets.UTF_8).trim()
+                if (parsedName.isNotEmpty()) {
+                    displayName = parsedName
+                }
+            }
+
+            devicesByIdentity[idString] = result.device
             eventSink?.success(mapOf(
                 "type" to "device",
-                "id" to id,
-                "name" to "MeshLink device",
+                "id" to idString,
+                "name" to displayName,
+                "rssi" to result.rssi,
                 "isConnectable" to (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && result.isConnectable)
             ))
         }
@@ -221,7 +417,7 @@ class MainActivity : FlutterActivity() {
         }
 
         override fun onStartFailure(errorCode: Int) {
-            stopDiscovery()
+            advertising = false
             eventSink?.success(mapOf("type" to "error", "message" to "MeshLink advertising could not start (code $errorCode)."))
         }
     }
@@ -237,14 +433,6 @@ class MainActivity : FlutterActivity() {
 
     private fun hasNearbyPermissions() = Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
         requiredPermissions().all { checkSelfPermission(it) == PackageManager.PERMISSION_GRANTED }
-
-    private fun meshLinkIdentity(): ByteArray {
-        val preferences = getSharedPreferences("meshlink", Context.MODE_PRIVATE)
-        preferences.getString("ble_identity", null)?.let { return Base64.decode(it, Base64.NO_WRAP) }
-        val identity = ByteArray(8).also { SecureRandom().nextBytes(it) }
-        preferences.edit().putString("ble_identity", Base64.encodeToString(identity, Base64.NO_WRAP)).apply()
-        return identity
-    }
 
     @SuppressLint("MissingPermission")
     private fun ensureGattServer() {
@@ -338,7 +526,7 @@ class MainActivity : FlutterActivity() {
         override fun onCharacteristicWriteRequest(device: BluetoothDevice, requestId: Int, characteristic: BluetoothGattCharacteristic,
             preparedWrite: Boolean, responseNeeded: Boolean, offset: Int, value: ByteArray?) {
             if (characteristic.uuid == REQUEST_CHARACTERISTIC && value != null) {
-                val id = Base64.encodeToString(value, Base64.NO_WRAP)
+                val id = String(value, StandardCharsets.US_ASCII)
                 pendingIncoming[id] = device
                 eventSink?.success(mapOf("type" to "incomingRequest", "deviceId" to id, "name" to "MeshLink device"))
             }
@@ -372,7 +560,8 @@ class MainActivity : FlutterActivity() {
         @SuppressLint("MissingPermission")
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             val request = gatt.getService(MESH_LINK_SERVICE.uuid)?.getCharacteristic(REQUEST_CHARACTERISTIC) ?: return
-            request.value = meshLinkIdentity(); gatt.writeCharacteristic(request)
+            request.value = meshLinkId().toByteArray(StandardCharsets.US_ASCII)
+            gatt.writeCharacteristic(request)
             clientTargetId?.let { eventSink?.success(mapOf("type" to "waitingForAcceptance", "deviceId" to it)) }
         }
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
@@ -391,9 +580,14 @@ class MainActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        if (isReceiverRegistered) {
+            try { unregisterReceiver(bluetoothStateReceiver) } catch (_: Exception) {}
+            isReceiverRegistered = false
+        }
         stopDiscovery()
         clientGatt?.close()
         gattServer?.close()
         super.onDestroy()
     }
 }
+

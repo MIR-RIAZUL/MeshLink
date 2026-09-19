@@ -6,6 +6,7 @@ import 'package:meshlink/features/devices/presentation/devices_screen.dart';
 import 'package:meshlink/features/messages/presentation/messages_screen.dart';
 import 'package:meshlink/features/settings/presentation/settings_screen.dart';
 import 'package:meshlink/features/devices/data/services/android_ble_discovery_service.dart';
+import 'package:meshlink/features/devices/data/services/device_discovery_service.dart';
 import 'package:meshlink/features/devices/providers/device_discovery_controller.dart';
 import 'package:meshlink/features/devices/providers/device_connection_controller.dart';
 
@@ -15,7 +16,9 @@ void main() {
 
 /// Root widget that sets up theme and navigation.
 class MeshLinkApp extends StatelessWidget {
-  const MeshLinkApp({super.key});
+  const MeshLinkApp({super.key, this.service});
+
+  final DeviceDiscoveryService? service;
 
   @override
   Widget build(BuildContext context) {
@@ -25,14 +28,16 @@ class MeshLinkApp extends StatelessWidget {
       theme: AppTheme.lightTheme,
       darkTheme: AppTheme.darkTheme,
       themeMode: ThemeMode.system,
-      home: const MainScaffold(),
+      home: MainScaffold(service: service),
     );
   }
 }
 
 /// Scaffold containing bottom navigation and the selected feature screen.
 class MainScaffold extends StatefulWidget {
-  const MainScaffold({super.key});
+  const MainScaffold({super.key, this.service});
+
+  final DeviceDiscoveryService? service;
 
   @override
   State<MainScaffold> createState() => _MainScaffoldState();
@@ -46,9 +51,10 @@ class _MainScaffoldState extends State<MainScaffold> {
   @override
   void initState() {
     super.initState();
-    final service = AndroidBleDiscoveryService();
+    final service = widget.service ?? AndroidBleDiscoveryService();
     _discoveryController = DeviceDiscoveryController(service);
     _connectionController = DeviceConnectionController(service);
+    _discoveryController.initialize();
   }
 
   @override
@@ -71,7 +77,7 @@ class _MainScaffoldState extends State<MainScaffold> {
         HomeScreen(controller: _discoveryController, connectionController: _connectionController),
         DevicesScreen(controller: _discoveryController, connectionController: _connectionController),
         const MessagesScreen(),
-        const SettingsScreen(),
+        SettingsScreen(controller: _discoveryController),
       ][_selectedIndex],
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
@@ -87,6 +93,7 @@ class _MainScaffoldState extends State<MainScaffold> {
     );
   }
 }
+
 // Minimal wrapper required by widget test.
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
@@ -94,3 +101,4 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => const MeshLinkApp();
 }
+
