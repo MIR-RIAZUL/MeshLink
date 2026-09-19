@@ -7,6 +7,7 @@ import 'package:meshlink/features/messages/presentation/messages_screen.dart';
 import 'package:meshlink/features/settings/presentation/settings_screen.dart';
 import 'package:meshlink/features/devices/data/services/android_ble_discovery_service.dart';
 import 'package:meshlink/features/devices/providers/device_discovery_controller.dart';
+import 'package:meshlink/features/devices/providers/device_connection_controller.dart';
 
 void main() {
   runApp(const MeshLinkApp());
@@ -40,18 +41,20 @@ class MainScaffold extends StatefulWidget {
 class _MainScaffoldState extends State<MainScaffold> {
   int _selectedIndex = 0;
   late final DeviceDiscoveryController _discoveryController;
+  late final DeviceConnectionController _connectionController;
 
   @override
   void initState() {
     super.initState();
-    _discoveryController = DeviceDiscoveryController(
-      AndroidBleDiscoveryService(),
-    );
+    final service = AndroidBleDiscoveryService();
+    _discoveryController = DeviceDiscoveryController(service);
+    _connectionController = DeviceConnectionController(service);
   }
 
   @override
   void dispose() {
     _discoveryController.dispose();
+    _connectionController.dispose();
     super.dispose();
   }
 
@@ -65,8 +68,8 @@ class _MainScaffoldState extends State<MainScaffold> {
   Widget build(BuildContext context) {
     return Scaffold(
       body: <Widget>[
-        HomeScreen(controller: _discoveryController),
-        DevicesScreen(controller: _discoveryController),
+        HomeScreen(controller: _discoveryController, connectionController: _connectionController),
+        DevicesScreen(controller: _discoveryController, connectionController: _connectionController),
         const MessagesScreen(),
         const SettingsScreen(),
       ][_selectedIndex],

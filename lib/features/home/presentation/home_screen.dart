@@ -3,16 +3,18 @@ import 'package:meshlink/core/constants/strings.dart';
 import 'package:meshlink/core/widgets/primary_button.dart';
 import 'package:meshlink/core/widgets/status_card.dart';
 import 'package:meshlink/features/devices/providers/device_discovery_controller.dart';
+import 'package:meshlink/features/devices/providers/device_connection_controller.dart';
 
 class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key, required this.controller});
+  const HomeScreen({super.key, required this.controller, required this.connectionController});
 
   final DeviceDiscoveryController controller;
+  final DeviceConnectionController connectionController;
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: controller,
+      animation: Listenable.merge([controller, connectionController]),
       builder: (context, _) => SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
@@ -47,7 +49,7 @@ class HomeScreen extends StatelessWidget {
                 children: [
                   const _KeyValueRow(keyLabel: AppStrings.internetLabel, value: AppStrings.internetValue),
                   _KeyValueRow(keyLabel: AppStrings.nearbyDevicesLabel, value: '${controller.devices.length}'),
-                  const _KeyValueRow(keyLabel: AppStrings.meshNetworkLabel, value: AppStrings.meshNetworkValue),
+                  _KeyValueRow(keyLabel: 'Direct Link', value: connectionController.status == ConnectionStatus.connected ? 'Connected' : 'Not Connected'),
                 ],
               ),
             ),
