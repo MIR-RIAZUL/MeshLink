@@ -1,21 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:meshlink/core/constants/strings.dart';
-import 'package:meshlink/core/widgets/status_card.dart';
 import 'package:meshlink/core/widgets/primary_button.dart';
-
-
+import 'package:meshlink/core/widgets/status_card.dart';
+import 'package:meshlink/features/devices/providers/device_discovery_controller.dart';
 
 class HomeScreen extends StatelessWidget {
-  const HomeScreen({super.key});
+  const HomeScreen({super.key, required this.controller});
+
+  final DeviceDiscoveryController controller;
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
+    return AnimatedBuilder(
+      animation: controller,
+      builder: (context, _) => SafeArea(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
             // Header
             Text(
               AppStrings.appName,
@@ -41,10 +44,10 @@ class HomeScreen extends StatelessWidget {
               title: AppStrings.networkStatusTitle,
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
-                children: const [
-                  _KeyValueRow(keyLabel: AppStrings.internetLabel, value: AppStrings.internetValue),
-                  _KeyValueRow(keyLabel: AppStrings.nearbyDevicesLabel, value: AppStrings.nearbyDevicesValue),
-                  _KeyValueRow(keyLabel: AppStrings.meshNetworkLabel, value: AppStrings.meshNetworkValue),
+                children: [
+                  const _KeyValueRow(keyLabel: AppStrings.internetLabel, value: AppStrings.internetValue),
+                  _KeyValueRow(keyLabel: AppStrings.nearbyDevicesLabel, value: '${controller.devices.length}'),
+                  const _KeyValueRow(keyLabel: AppStrings.meshNetworkLabel, value: AppStrings.meshNetworkValue),
                 ],
               ),
             ),
@@ -52,15 +55,14 @@ class HomeScreen extends StatelessWidget {
             // Discover Devices Button
             Center(
               child: PrimaryButton(
-                label: AppStrings.discoverButton,
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text(AppStrings.discoverSnack)),
-                  );
-                },
+                label: controller.isDiscovering ? 'Stop Discovery' : AppStrings.discoverButton,
+                onPressed: controller.isDiscovering
+                    ? controller.stopDiscovery
+                    : controller.startDiscovery,
               ),
             ),
-          ],
+            ],
+          ),
         ),
       ),
     );

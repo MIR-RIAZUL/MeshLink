@@ -19,6 +19,7 @@ android {
         applicationId = "com.example.meshlink"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
+        // BLE advertising is available from Android 5.0 (API 21).
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         // Uses the version code from pubspec.yaml. When using split APKs, 1000 * ABI_VERSION

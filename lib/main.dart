@@ -5,6 +5,8 @@ import 'package:meshlink/features/home/presentation/home_screen.dart';
 import 'package:meshlink/features/devices/presentation/devices_screen.dart';
 import 'package:meshlink/features/messages/presentation/messages_screen.dart';
 import 'package:meshlink/features/settings/presentation/settings_screen.dart';
+import 'package:meshlink/features/devices/data/services/android_ble_discovery_service.dart';
+import 'package:meshlink/features/devices/providers/device_discovery_controller.dart';
 
 void main() {
   runApp(const MeshLinkApp());
@@ -37,12 +39,21 @@ class MainScaffold extends StatefulWidget {
 
 class _MainScaffoldState extends State<MainScaffold> {
   int _selectedIndex = 0;
-  static final List<Widget> _pages = <Widget>[
-    const HomeScreen(),
-    const DevicesScreen(),
-    const MessagesScreen(),
-    const SettingsScreen(),
-  ];
+  late final DeviceDiscoveryController _discoveryController;
+
+  @override
+  void initState() {
+    super.initState();
+    _discoveryController = DeviceDiscoveryController(
+      AndroidBleDiscoveryService(),
+    );
+  }
+
+  @override
+  void dispose() {
+    _discoveryController.dispose();
+    super.dispose();
+  }
 
   void _onItemTapped(int index) {
     setState(() {
@@ -53,7 +64,12 @@ class _MainScaffoldState extends State<MainScaffold> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: _pages[_selectedIndex],
+      body: <Widget>[
+        HomeScreen(controller: _discoveryController),
+        DevicesScreen(controller: _discoveryController),
+        const MessagesScreen(),
+        const SettingsScreen(),
+      ][_selectedIndex],
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _selectedIndex,
         onTap: _onItemTapped,
