@@ -144,14 +144,12 @@ void main() {
       await mockDiscovery.dispose();
     });
 
-    test('Direct link priority: routes directly when destination is connected', () async {
-      // Connect Node A and Node C to Node B
-      mockDiscovery.emit(const ConnectionEvent('connected', 'NODE-A'));
+    test('Plaintext route is disabled', () async {
       mockDiscovery.emit(const ConnectionEvent('connected', 'NODE-C'));
       await Future<void>.delayed(const Duration(milliseconds: 10));
 
       final msg = MeshMessage(
-        id: 'msg-1',
+        id: 'msg-plaintext-disabled',
         conversationId: 'NODE-C',
         senderId: 'NODE-B',
         receiverId: 'NODE-C',
@@ -162,30 +160,60 @@ void main() {
         status: MessageStatus.pending,
       );
 
-      final forwarded = await router.routeMessage(msg);
+      await expectLater(router.routeMessage(msg), throwsA(isA<UnsupportedError>()));
+      expect(mockDiscovery.sentTransmissions.isEmpty, isTrue);
+    });
+
+    test('Encrypted direct link priority: routes encrypted payload when destination is connected', () async {
+      mockDiscovery.emit(const ConnectionEvent('connected', 'NODE-A'));
+      mockDiscovery.emit(const ConnectionEvent('connected', 'NODE-C'));
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+
+      final payload = {
+        'type': 'encrypted_message',
+        'version': 1,
+        'messageId': 'msg-1',
+        'originId': 'NODE-B',
+        'destinationId': 'NODE-C',
+        'senderId': 'NODE-B',
+        'receiverId': 'NODE-C',
+        'conversationId': 'NODE-C',
+        'timestamp': DateTime.now().toIso8601String(),
+        'ttl': 5,
+        'hopCount': 0,
+        'nonce': 'A' * 12,
+        'ciphertext': 'ciphertext',
+        'mac': 'mac',
+      };
+
+      final forwarded = await router.routeEncryptedPayload(payload);
       expect(forwarded, isTrue);
       expect(mockDiscovery.sentTransmissions.length, 1);
       expect(mockDiscovery.sentTransmissions.first['deviceId'], 'NODE-C');
     });
 
-    test('Multi-hop relay: forwards message when destination is not directly connected', () async {
-      // Node B is only connected to Node C (destination is Node D)
+    test('Encrypted multi-hop relay: forwards encrypted message when destination is not directly connected', () async {
       mockDiscovery.emit(const ConnectionEvent('connected', 'NODE-C'));
       await Future<void>.delayed(const Duration(milliseconds: 10));
 
-      final msg = MeshMessage(
-        id: 'msg-2',
-        conversationId: 'NODE-D',
-        senderId: 'NODE-B',
-        receiverId: 'NODE-D',
-        originId: 'NODE-B',
-        destinationId: 'NODE-D',
-        text: 'Routed hello to D',
-        timestamp: DateTime.now(),
-        status: MessageStatus.pending,
-      );
+      final payload = {
+        'type': 'encrypted_message',
+        'version': 1,
+        'messageId': 'msg-2',
+        'originId': 'NODE-B',
+        'destinationId': 'NODE-D',
+        'senderId': 'NODE-B',
+        'receiverId': 'NODE-D',
+        'conversationId': 'NODE-D',
+        'timestamp': DateTime.now().toIso8601String(),
+        'ttl': 5,
+        'hopCount': 0,
+        'nonce': 'B' * 12,
+        'ciphertext': 'ciphertext',
+        'mac': 'mac',
+      };
 
-      final forwarded = await router.routeMessage(msg);
+      final forwarded = await router.routeEncryptedPayload(payload);
       expect(forwarded, isTrue);
       expect(mockDiscovery.sentTransmissions.length, 1);
       expect(mockDiscovery.sentTransmissions.first['deviceId'], 'NODE-C');

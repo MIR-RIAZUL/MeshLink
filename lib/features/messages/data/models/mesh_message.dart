@@ -143,21 +143,11 @@ class MeshMessage {
   factory MeshMessage.fromJson(String source) =>
       MeshMessage.fromMap(jsonDecode(source) as Map<String, dynamic>);
 
-  /// Wire protocol payload for BLE/P2P transmission
-  String toWireProtocol({int? ttl, int? hopCount}) => jsonEncode({
-    'type': 'message',
-    'version': 1,
-    'messageId': id,
-    'originId': originId,
-    'destinationId': destinationId,
-    'senderId': senderId,
-    'receiverId': receiverId,
-    'conversationId': conversationId,
-    'timestamp': timestamp.toIso8601String(),
-    'text': text,
-    'ttl': ttl ?? this.ttl,
-    'hopCount': hopCount ?? this.hopCount,
-  });
+  /// Plaintext wire payloads are intentionally disabled.
+  /// The active mesh path must only transmit encrypted_message packets.
+  String toWireProtocol({int? ttl, int? hopCount}) => throw UnsupportedError(
+    'Plaintext wire protocol is disabled. Use encrypted_message payloads only.',
+  );
 
   /// Parse incoming wire protocol payload
   static MeshMessage? fromWireProtocol(String payload) {

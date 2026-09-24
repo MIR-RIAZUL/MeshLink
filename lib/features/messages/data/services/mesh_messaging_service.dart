@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:meshlink/features/devices/data/services/device_discovery_service.dart';
 import 'package:meshlink/features/messages/data/models/mesh_message.dart';
@@ -6,11 +7,27 @@ import 'package:meshlink/features/messages/data/services/message_storage_service
 import 'package:meshlink/features/messages/data/services/mesh_router.dart';
 import 'package:meshlink/features/messages/data/services/mesh_crypto_service.dart';
 
+class MeshFileTransferProgress {
+  const MeshFileTransferProgress({
+    required this.transferId,
+    required this.fileName,
+    required this.status,
+    required this.progress,
+  });
+
+  final String transferId;
+  final String fileName;
+  final String status;
+  final double progress;
+}
+
 abstract class MeshMessagingService {
   Stream<MeshMessage> get incomingMessages;
   Stream<String> get ackReceived;
+  Stream<MeshFileTransferProgress> get fileTransferProgress;
 
   Future<bool> sendMessage(MeshMessage message);
+  Future<void> sendFile(String peerId, File file);
   Future<List<MeshMessage>> getMessagesForPeer(String peerId);
   Future<void> retryMessage(MeshMessage message);
   Future<void> flushPendingMessages(String peerId);
@@ -42,9 +59,18 @@ class BleMeshMessagingService implements MeshMessagingService {
   final MeshCryptoService _crypto;
   String _currentLocalId;
   bool _isFlushing = false;
+  final Map<String, Map<String, dynamic>> _incomingTransfers = {};
+  final Map<String, Map<int, List<int>>> _transferChunks = {};
+
+  final StreamController<MeshFileTransferProgress> _fileTransferProgressController =
+      StreamController<MeshFileTransferProgress>.broadcast();
 
   String get localId => _currentLocalId;
   MeshRouter get router => _router;
+
+  @override
+  Stream<MeshFileTransferProgress> get fileTransferProgress =>
+      _fileTransferProgressController.stream;
 
   void setLocalId(String id) {
     _currentLocalId = id;
@@ -152,6 +178,8 @@ class BleMeshMessagingService implements MeshMessagingService {
           await _deliverEncryptedMessage(payload);
         case LocalKeyExchangeDelivery(:final payload):
           await _handleKeyExchange(payload);
+        case FileTransferDelivery(:final payload):
+          await _handleFileTransferPacket(payload);
         case LocalAckDelivery(:final messageId):
           await _storage.updateMessageStatus(
             messageId,
@@ -167,6 +195,93 @@ class BleMeshMessagingService implements MeshMessagingService {
     } catch (_) {
       // Ignore malformed payloads
     }
+  }
+
+  @override
+  Future<void> sendFile(String peerId, File file) async {
+    final fileName = file.uri.pathSegments.isEmpty ? 'meshlink-transfer.bin' : file.uri.pathSegments.last;
+    final bytes = await file.readAsBytes();
+    if (bytes.isEmpty) return;
+
+    final transferId = 'FT-${DateTime.now().millisecondsSinceEpoch}';
+    final totalChunks = (bytes.length / 32 * 1024).ceil();
+    final safeTotal = totalChunks <= 0 ? 1 : totalChunks;
+    final startPayload = {
+      'type': 'file_start',
+      'version': 1,
+      'messageId': '$transferId-start',
+      'transferId': transferId,
+      'originId': _currentLocalId,
+      'destinationId': peerId,
+      'ttl': MeshMessage.defaultTtl,
+      'hopCount': 0,
+      'fileName': fileName,
+      'fileSize': bytes.length,
+      'totalChunks': safeTotal,
+      'timestamp': DateTime.now().toIso8601String(),
+    };
+    await _router.routeEncryptedPayload(startPayload);
+
+    for (var chunkIndex = 0; chunkIndex < safeTotal; chunkIndex++) {
+      final start = chunkIndex * (32 * 1024);
+      final end = (chunkIndex + 1) * (32 * 1024);
+      final chunk = bytes.sublist(start, end > bytes.length ? bytes.length : end);
+      final encrypted = await _crypto.encrypt(
+        messageId: '$transferId-chunk-$chunkIndex',
+        originId: _currentLocalId,
+        destinationId: peerId,
+        text: base64Encode(chunk),
+      );
+
+      await _router.routeEncryptedPayload({
+        'type': 'file_chunk',
+        'version': 1,
+        'messageId': '$transferId-chunk-$chunkIndex',
+        'transferId': transferId,
+        'originId': _currentLocalId,
+        'destinationId': peerId,
+        'senderId': _currentLocalId,
+        'receiverId': peerId,
+        'ttl': MeshMessage.defaultTtl,
+        'hopCount': 0,
+        'fileName': fileName,
+        'fileSize': bytes.length,
+        'totalChunks': safeTotal,
+        'chunkIndex': chunkIndex,
+        'nonce': encrypted.nonce,
+        'ciphertext': encrypted.ciphertext,
+        'mac': encrypted.mac,
+      });
+
+      _fileTransferProgressController.add(MeshFileTransferProgress(
+        transferId: transferId,
+        fileName: fileName,
+        status: 'sending',
+        progress: (chunkIndex + 1) / safeTotal,
+      ));
+    }
+
+    final endPayload = {
+      'type': 'file_end',
+      'version': 1,
+      'messageId': '$transferId-end',
+      'transferId': transferId,
+      'originId': _currentLocalId,
+      'destinationId': peerId,
+      'ttl': MeshMessage.defaultTtl,
+      'hopCount': 0,
+      'fileName': fileName,
+      'fileSize': bytes.length,
+      'totalChunks': safeTotal,
+      'timestamp': DateTime.now().toIso8601String(),
+    };
+    await _router.routeEncryptedPayload(endPayload);
+    _fileTransferProgressController.add(MeshFileTransferProgress(
+      transferId: transferId,
+      fileName: fileName,
+      status: 'complete',
+      progress: 1.0,
+    ));
   }
 
   Future<bool> _sendEncrypted(MeshMessage message) async {

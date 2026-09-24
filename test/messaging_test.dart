@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -80,7 +81,7 @@ class MockDiscoveryService implements DeviceDiscoveryService {
 
 void main() {
   group('MeshMessage Model & Wire Protocol', () {
-    test('Serializes to and from wire protocol JSON correctly', () {
+    test('Disables plaintext wire serialization for active outbound traffic', () {
       final now = DateTime.utc(2026, 9, 20, 12, 0, 0);
       final msg = MeshMessage(
         id: 'msg-12345',
@@ -92,20 +93,7 @@ void main() {
         status: MessageStatus.sent,
       );
 
-      final wireStr = msg.toWireProtocol();
-      expect(wireStr.contains('"type":"message"'), isTrue);
-      expect(wireStr.contains('"version":1'), isTrue);
-      expect(wireStr.contains('"messageId":"msg-12345"'), isTrue);
-      expect(wireStr.contains('"text":"Hello MeshLink peer!"'), isTrue);
-
-      final decoded = MeshMessage.fromWireProtocol(wireStr);
-      expect(decoded, isNotNull);
-      expect(decoded!.id, 'msg-12345');
-      expect(decoded.senderId, 'ML-000001');
-      expect(decoded.receiverId, 'ML-000002');
-      expect(decoded.text, 'Hello MeshLink peer!');
-      expect(decoded.timestamp, now);
-      expect(decoded.status, MessageStatus.delivered);
+      expect(() => msg.toWireProtocol(), throwsUnsupportedError);
     });
 
     test('Creates valid ACK payload frame', () {
@@ -370,11 +358,26 @@ void main() {
         status: MessageStatus.delivered,
       );
 
-      mockDiscovery.emit(MessageReceivedEvent(incoming.toWireProtocol()));
+      final payload = jsonEncode({
+        'type': 'message',
+        'version': 1,
+        'messageId': incoming.id,
+        'originId': incoming.originId,
+        'destinationId': incoming.destinationId,
+        'senderId': incoming.senderId,
+        'receiverId': incoming.receiverId,
+        'conversationId': incoming.conversationId,
+        'timestamp': incoming.timestamp.toIso8601String(),
+        'text': incoming.text,
+        'ttl': incoming.ttl,
+        'hopCount': incoming.hopCount,
+      });
+
+      mockDiscovery.emit(MessageReceivedEvent(payload));
       await Future<void>.delayed(const Duration(milliseconds: 20));
 
       // Emit exact same packet again
-      mockDiscovery.emit(MessageReceivedEvent(incoming.toWireProtocol()));
+      mockDiscovery.emit(MessageReceivedEvent(payload));
       await Future<void>.delayed(const Duration(milliseconds: 20));
 
       final list = controller.getMessages('ML-REMOTE');

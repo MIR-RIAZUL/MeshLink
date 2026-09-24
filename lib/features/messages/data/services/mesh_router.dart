@@ -28,6 +28,11 @@ class LocalKeyExchangeDelivery extends RoutedPayloadResult {
   final Map<String, dynamic> payload;
 }
 
+class FileTransferDelivery extends RoutedPayloadResult {
+  const FileTransferDelivery(this.payload);
+  final Map<String, dynamic> payload;
+}
+
 class RelayedMessage extends RoutedPayloadResult {
   const RelayedMessage({
     required this.messageId,
@@ -111,28 +116,13 @@ class MeshRouter {
     }
   }
 
-  /// Route an outgoing message: checks for direct connection first,
-  /// then falls back to multi-hop forwarding through connected peers.
+  /// Plaintext message routing is intentionally disabled.
+  /// All active outbound traffic must use encrypted packets via
+  /// routeEncryptedPayload() and the encrypted_message protocol.
   Future<bool> routeMessage(MeshMessage message) async {
-    final destination = message.destinationId;
-    final payload = message.toWireProtocol();
-
-    // Priority 1: Direct link available
-    if (connectedPeers.contains(destination)) {
-      final sent = await _service.sendMessage(destination, payload);
-      if (sent) return true;
-    }
-
-    // Priority 2: Multi-hop forwarding through available connected peers
-    bool anySent = false;
-    for (final peerId in connectedPeers) {
-      if (peerId != message.originId && peerId != _currentLocalId && peerId != destination) {
-        final sent = await _service.sendMessage(peerId, payload);
-        if (sent) anySent = true;
-      }
-    }
-
-    return anySent;
+    throw UnsupportedError(
+      'Plaintext message routing is disabled. Use routeEncryptedPayload() with encrypted_message packets.',
+    );
   }
 
   /// Sends an already encrypted end-to-end packet without inspecting its body.
@@ -176,6 +166,12 @@ class MeshRouter {
         return await _handleIncomingEncryptedMessage(data, fromPeerId);
       } else if (type == 'key_request' || type == 'key_response') {
         return await _handleKeyExchange(data, fromPeerId);
+      } else if (type == 'file_start' ||
+          type == 'file_chunk' ||
+          type == 'file_end' ||
+          type == 'file_ack' ||
+          type == 'file_error') {
+        return await _handleIncomingFileTransfer(data, fromPeerId);
       } else if (type == 'ack') {
         return await _handleIncomingAck(data, fromPeerId);
       }
@@ -232,6 +228,36 @@ class MeshRouter {
     _addToProcessed(cacheKey, _processedMessageIds);
     if (destinationId == _currentLocalId) return LocalKeyExchangeDelivery(data);
     return _relayPayload(data, requestId, originId, destinationId, ttl, hopCount, fromPeerId);
+  }
+
+  Future<RoutedPayloadResult> _handleIncomingFileTransfer(
+    Map<String, dynamic> data,
+    String? fromPeerId,
+  ) async {
+    final type = data['type'] as String?;
+    final transferId = data['transferId'] as String?;
+    final messageId = data['messageId'] as String?;
+    final originId = data['originId'] as String?;
+    final destinationId = data['destinationId'] as String?;
+    final ttl = data['ttl'] as int?;
+    final hopCount = data['hopCount'] as int? ?? 0;
+    if (type == null ||
+        transferId == null ||
+        messageId == null ||
+        originId == null ||
+        destinationId == null ||
+        ttl == null ||
+        data['version'] != 1) {
+      return const DroppedPayload('Invalid file transfer packet');
+    }
+    if (_processedMessageIds.contains(messageId)) {
+      return const DroppedPayload('Duplicate file transfer packet');
+    }
+    _addToProcessed(messageId, _processedMessageIds);
+    if (destinationId == _currentLocalId) {
+      return FileTransferDelivery(data);
+    }
+    return _relayPayload(data, messageId, originId, destinationId, ttl, hopCount, fromPeerId);
   }
 
   Future<RoutedPayloadResult> _relayPayload(
