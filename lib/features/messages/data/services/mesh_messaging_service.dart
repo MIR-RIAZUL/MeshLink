@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:meshlink/features/devices/data/services/device_discovery_service.dart';
@@ -6,6 +7,8 @@ import 'package:meshlink/features/messages/data/models/mesh_message.dart';
 import 'package:meshlink/features/messages/data/services/message_storage_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_router.dart';
 import 'package:meshlink/features/messages/data/services/mesh_crypto_service.dart';
+import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
 
 class MeshFileTransferProgress {
   const MeshFileTransferProgress({
@@ -60,7 +63,6 @@ class BleMeshMessagingService implements MeshMessagingService {
   String _currentLocalId;
   bool _isFlushing = false;
   final Map<String, Map<String, dynamic>> _incomingTransfers = {};
-  final Map<String, Map<int, List<int>>> _transferChunks = {};
 
   final StreamController<MeshFileTransferProgress> _fileTransferProgressController =
       StreamController<MeshFileTransferProgress>.broadcast();
@@ -204,7 +206,8 @@ class BleMeshMessagingService implements MeshMessagingService {
     if (bytes.isEmpty) return;
 
     final transferId = 'FT-${DateTime.now().millisecondsSinceEpoch}';
-    final totalChunks = (bytes.length / 32 * 1024).ceil();
+    final chunkSize = 32 * 1024;
+    final totalChunks = (bytes.length / chunkSize).ceil();
     final safeTotal = totalChunks <= 0 ? 1 : totalChunks;
     final startPayload = {
       'type': 'file_start',
@@ -223,8 +226,8 @@ class BleMeshMessagingService implements MeshMessagingService {
     await _router.routeEncryptedPayload(startPayload);
 
     for (var chunkIndex = 0; chunkIndex < safeTotal; chunkIndex++) {
-      final start = chunkIndex * (32 * 1024);
-      final end = (chunkIndex + 1) * (32 * 1024);
+      final start = chunkIndex * chunkSize;
+      final end = (chunkIndex + 1) * chunkSize;
       final chunk = bytes.sublist(start, end > bytes.length ? bytes.length : end);
       final encrypted = await _crypto.encrypt(
         messageId: '$transferId-chunk-$chunkIndex',
@@ -359,6 +362,129 @@ class BleMeshMessagingService implements MeshMessagingService {
     }
   }
 
+  Future<void> _handleFileTransferPacket(Map<String, dynamic> payload) async {
+    final type = payload['type'] as String?;
+    final transferId = payload['transferId'] as String?;
+    if (type == null || transferId == null) return;
+
+    switch (type) {
+      case 'file_start':
+        final fileName = payload['fileName'] as String? ?? 'meshlink-transfer.bin';
+        final totalChunks = (payload['totalChunks'] as int?) ?? 0;
+        _incomingTransfers[transferId] = {
+          'fileName': fileName,
+          'totalChunks': totalChunks,
+          'chunks': <int, List<int>>{},
+          'fileSize': payload['fileSize'] as int? ?? 0,
+          'originId': payload['originId'] as String? ?? '',
+        };
+        _fileTransferProgressController.add(MeshFileTransferProgress(
+          transferId: transferId,
+          fileName: fileName,
+          status: 'receiving',
+          progress: 0.0,
+        ));
+        break;
+      case 'file_chunk':
+        final originId = payload['originId'] as String? ?? '';
+        final transfer = _incomingTransfers.putIfAbsent(transferId, () => {
+          'fileName': payload['fileName'] as String? ?? 'meshlink-transfer.bin',
+          'totalChunks': payload['totalChunks'] as int? ?? 1,
+          'chunks': <int, List<int>>{},
+          'fileSize': payload['fileSize'] as int? ?? 0,
+          'originId': originId,
+        });
+        try {
+          final decrypted = await _crypto.decrypt(
+            messageId: payload['messageId'] as String,
+            originId: originId,
+            destinationId: _currentLocalId,
+            nonce: payload['nonce'] as String,
+            ciphertext: payload['ciphertext'] as String,
+            mac: payload['mac'] as String,
+          );
+          final chunkIndex = (payload['chunkIndex'] as int?) ?? 0;
+          final fileChunks = (transfer['chunks'] as Map<int, List<int>>?) ?? <int, List<int>>{};
+          transfer['chunks'] = fileChunks;
+          fileChunks[chunkIndex] = base64Decode(decrypted);
+          final totalChunks = (transfer['totalChunks'] as int?) ?? 1;
+          final received = fileChunks.length;
+          final progressValue = totalChunks == 0 ? 0.0 : (received / totalChunks).clamp(0.0, 1.0);
+          _fileTransferProgressController.add(MeshFileTransferProgress(
+            transferId: transferId,
+            fileName: transfer['fileName'] as String? ?? 'meshlink-transfer.bin',
+            status: 'receiving',
+            progress: progressValue,
+          ));
+          if (received >= totalChunks && totalChunks > 0) {
+            await _finalizeIncomingTransfer(transferId);
+          }
+        } on MeshCryptoException {
+          // Ignore tampered or wrong-key chunks.
+        }
+        break;
+      case 'file_end':
+        await _finalizeIncomingTransfer(transferId);
+        break;
+      case 'file_ack':
+      case 'file_error':
+        break;
+    }
+  }
+
+  Future<void> _finalizeIncomingTransfer(String transferId) async {
+    final transfer = _incomingTransfers[transferId];
+    if (transfer == null) return;
+
+    final chunks = (transfer['chunks'] as Map<int, List<int>>?) ?? <int, List<int>>{};
+    final totalChunks = (transfer['totalChunks'] as int?) ?? chunks.length;
+    if (totalChunks <= 0 || chunks.length < totalChunks) {
+      _fileTransferProgressController.add(MeshFileTransferProgress(
+        transferId: transferId,
+        fileName: transfer['fileName'] as String? ?? 'meshlink-transfer.bin',
+        status: 'failed',
+        progress: 0.0,
+      ));
+      _incomingTransfers.remove(transferId);
+      return;
+    }
+
+    final assembled = <int>[];
+    for (var idx = 0; idx < totalChunks; idx++) {
+      final chunk = chunks[idx];
+      if (chunk == null) {
+        _fileTransferProgressController.add(MeshFileTransferProgress(
+          transferId: transferId,
+          fileName: transfer['fileName'] as String? ?? 'meshlink-transfer.bin',
+          status: 'failed',
+          progress: 0.0,
+        ));
+        _incomingTransfers.remove(transferId);
+        return;
+      }
+      assembled.addAll(chunk);
+    }
+
+    final downloadDir = await getDownloadsDirectory() ?? Directory.systemTemp;
+    final originalName = transfer['fileName'] as String? ?? 'meshlink-transfer.bin';
+    final baseName = p.basenameWithoutExtension(originalName);
+    final extension = p.extension(originalName);
+    var candidate = File(p.join(downloadDir.path, originalName));
+    var counter = 1;
+    while (await candidate.exists()) {
+      candidate = File(p.join(downloadDir.path, '$baseName($counter)$extension'));
+      counter++;
+    }
+    await candidate.writeAsBytes(assembled, flush: true);
+    _fileTransferProgressController.add(MeshFileTransferProgress(
+      transferId: transferId,
+      fileName: originalName,
+      status: 'complete',
+      progress: 1.0,
+    ));
+    _incomingTransfers.remove(transferId);
+  }
+
   Future<void> _deliverEncryptedMessage(Map<String, dynamic> payload) async {
     try {
       final text = await _crypto.decrypt(
@@ -397,6 +523,7 @@ class BleMeshMessagingService implements MeshMessagingService {
     await _subscription?.cancel();
     await _incomingController.close();
     await _ackController.close();
+    await _fileTransferProgressController.close();
     await _router.dispose();
   }
 }

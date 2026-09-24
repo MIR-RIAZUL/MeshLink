@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:meshlink/features/devices/providers/device_connection_controller.dart';
 import 'package:meshlink/features/messages/data/models/mesh_message.dart';
@@ -71,6 +74,24 @@ class _ConversationScreenState extends State<ConversationScreen> {
     _textController.clear();
     await widget.messagingController.sendMessage(widget.peerId, text);
     _scrollToBottom();
+  }
+
+  Future<void> _pickAndSendFile() async {
+    try {
+      final result = await FilePicker.platform.pickFiles();
+      final path = result?.files.single.path;
+      if (path == null || path.isEmpty) return;
+      await widget.messagingController.sendFile(widget.peerId, File(path));
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to send the selected file.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
   }
 
   void _scrollToBottom() {
@@ -336,6 +357,12 @@ class _ConversationScreenState extends State<ConversationScreen> {
                             },
                           ),
                         ),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        onPressed: _pickAndSendFile,
+                        icon: const Icon(Icons.attach_file),
+                        tooltip: 'Send a file',
                       ),
                       const SizedBox(width: 8),
                       IconButton.filled(

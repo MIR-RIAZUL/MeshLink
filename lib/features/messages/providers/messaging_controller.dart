@@ -1,5 +1,7 @@
 import 'dart:async';
 
+import 'dart:io';
+
 import 'package:flutter/foundation.dart';
 import 'package:meshlink/features/devices/providers/device_connection_controller.dart';
 import 'package:meshlink/features/messages/data/models/mesh_message.dart';
@@ -102,6 +104,14 @@ class MessagingController extends ChangeNotifier {
 
     await loadMessages(peerId);
   }
+
+  Future<void> sendFile(String peerId, File file) async {
+    await _service.sendFile(peerId, file);
+    if (hasListeners) notifyListeners();
+  }
+
+  Stream<MeshFileTransferProgress> get fileTransferProgress =>
+      _service.fileTransferProgress;
 
   Future<void> retryMessage(MeshMessage message) async {
     final peerId = message.receiverId;
