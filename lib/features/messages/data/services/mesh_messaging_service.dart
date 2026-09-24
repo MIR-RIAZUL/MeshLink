@@ -12,6 +12,7 @@ abstract class MeshMessagingService {
   Future<bool> sendMessage(MeshMessage message);
   Future<List<MeshMessage>> getMessagesForPeer(String peerId);
   Future<void> retryMessage(MeshMessage message);
+  Future<void> flushPendingMessages(String peerId);
   Future<void> dispose();
 }
 
@@ -20,15 +21,16 @@ class BleMeshMessagingService implements MeshMessagingService {
     required DeviceDiscoveryService discoveryService,
     required MessageStorageService storageService,
     required String localId,
-  }) : _service = discoveryService,
-       _storage = storageService,
-       _currentLocalId = localId {
+  })  : _service = discoveryService,
+        _storage = storageService,
+        _currentLocalId = localId {
     _subscription = _service.events.listen(_handleDiscoveryEvent);
   }
 
   final DeviceDiscoveryService _service;
   final MessageStorageService _storage;
   String _currentLocalId;
+  bool _isFlushing = false;
 
   String get localId => _currentLocalId;
 
@@ -50,26 +52,49 @@ class BleMeshMessagingService implements MeshMessagingService {
 
   @override
   Future<bool> sendMessage(MeshMessage message) async {
-    // 1. Save locally with sending state
+    // Validate text length
+    MeshMessage.validateLength(message.text);
+
+    // If message is created in pending state (offline), store locally without wire transmission
+    if (message.status == MessageStatus.pending) {
+      await _storage.saveMessage(message);
+      return false;
+    }
+
+    // 1. Prepare sending status message
     final sendingMsg = message.copyWith(status: MessageStatus.sending);
     await _storage.saveMessage(sendingMsg);
 
-    // 2. Transmit over BLE GATT connection
+    // 2. Transmit wire payload over P2P link
     final payload = sendingMsg.toWireProtocol();
     final sent = await _service.sendMessage(message.receiverId, payload);
 
     if (sent) {
+      // Sent over wire, waiting for ACK to mark delivered
+      final sentMsg = message.copyWith(status: MessageStatus.sent);
       await _storage.updateMessageStatus(message.id, MessageStatus.sent);
+      _incomingController.add(sentMsg);
       return true;
     } else {
-      await _storage.updateMessageStatus(message.id, MessageStatus.failed);
+      // Failed to deliver frame (offline or connection lost during send)
+      final newStatus = message.retryCount >= MeshMessage.maxRetryLimit
+          ? MessageStatus.failed
+          : MessageStatus.pending;
+      final failedMsg = message.copyWith(status: newStatus);
+      await _storage.updateMessageStatus(message.id, newStatus);
+      _incomingController.add(failedMsg);
       return false;
     }
   }
 
   @override
   Future<void> retryMessage(MeshMessage message) async {
-    await sendMessage(message);
+    await _storage.incrementRetryCount(message.id);
+    final toSend = message.copyWith(
+      status: MessageStatus.sending,
+      retryCount: message.retryCount + 1,
+    );
+    await sendMessage(toSend);
   }
 
   @override
@@ -77,8 +102,30 @@ class BleMeshMessagingService implements MeshMessagingService {
     return _storage.getMessages(peerId);
   }
 
+  @override
+  Future<void> flushPendingMessages(String peerId) async {
+    if (_isFlushing) return;
+    _isFlushing = true;
+    try {
+      final pending = await _storage.getPendingMessages(peerId);
+      for (final msg in pending) {
+        await retryMessage(msg);
+      }
+    } finally {
+      _isFlushing = false;
+    }
+  }
+
   void _handleDiscoveryEvent(DeviceDiscoveryEvent event) async {
+    if (event is ConnectionEvent) {
+      if (event.type == 'connected') {
+        await flushPendingMessages(event.deviceId);
+      }
+      return;
+    }
+
     if (event is! MessageReceivedEvent) return;
+
     try {
       final data = jsonDecode(event.payload) as Map<String, dynamic>;
       final type = data['type'] as String?;
@@ -87,16 +134,24 @@ class BleMeshMessagingService implements MeshMessagingService {
         final messageId = data['messageId'] as String;
         final senderId = data['senderId'] as String;
         final receiverId = data['receiverId'] as String;
-        final text = data['text'] as String;
+        final text = (data['text'] as String? ?? '').trim();
         final timestamp =
             DateTime.tryParse(data['timestamp'] as String? ?? '') ??
             DateTime.now();
 
+        // Enforce maximum size limit on incoming text
+        if (text.length > MeshMessage.maxMessageLength) {
+          return;
+        }
+
+        final conversationId = senderId; // Conversation for receiver is sender ID
+
         // Duplicate protection
         if (await _storage.hasMessage(messageId)) {
-          // Already have it, but reply with ACK in case sender didn't receive previous ACK
+          // Message already stored locally, but reply with ACK frame in case previous ACK was lost
           final ackPayload = MeshMessage.createAckPayload(
             messageId: messageId,
+            conversationId: conversationId,
             senderId: _currentLocalId,
             receiverId: senderId,
           );
@@ -106,6 +161,7 @@ class BleMeshMessagingService implements MeshMessagingService {
 
         final receivedMessage = MeshMessage(
           id: messageId,
+          conversationId: conversationId,
           senderId: senderId,
           receiverId: receiverId,
           text: text,
@@ -119,6 +175,7 @@ class BleMeshMessagingService implements MeshMessagingService {
         // Send ACK back to sender
         final ackPayload = MeshMessage.createAckPayload(
           messageId: messageId,
+          conversationId: conversationId,
           senderId: _currentLocalId,
           receiverId: senderId,
         );

@@ -9,6 +9,9 @@ abstract class MessageStorageService {
   Future<bool> hasMessage(String messageId);
   Future<List<String>> getActivePeerIds();
   Future<MeshMessage?> getLastMessage(String peerId);
+  Future<void> incrementRetryCount(String messageId);
+  Future<List<MeshMessage>> getPendingMessages(String peerId);
+  Future<List<MeshMessage>> getAllPendingMessages();
 }
 
 class InMemoryMessageStorageService implements MessageStorageService {
@@ -24,13 +27,13 @@ class InMemoryMessageStorageService implements MessageStorageService {
   @override
   Future<void> saveMessage(MeshMessage message) async {
     _knownMessageIds.add(message.id);
-    // Store under both sender and receiver peer ID mapping
-    final targetPeer = message.receiverId;
-    final otherPeer = message.senderId;
+    final targetPeer = message.conversationId.isNotEmpty
+        ? message.conversationId
+        : message.receiverId;
 
     _addForPeer(targetPeer, message);
-    if (otherPeer != targetPeer) {
-      _addForPeer(otherPeer, message);
+    if (message.senderId != targetPeer && message.senderId.isNotEmpty) {
+      _addForPeer(message.senderId, message);
     }
   }
 
@@ -59,6 +62,46 @@ class InMemoryMessageStorageService implements MessageStorageService {
   }
 
   @override
+  Future<void> incrementRetryCount(String messageId) async {
+    for (final list in _messagesByPeer.values) {
+      final index = list.indexWhere((m) => m.id == messageId);
+      if (index >= 0) {
+        list[index] = list[index].copyWith(
+          retryCount: list[index].retryCount + 1,
+        );
+      }
+    }
+  }
+
+  @override
+  Future<List<MeshMessage>> getPendingMessages(String peerId) async {
+    final list = _messagesByPeer[peerId] ?? [];
+    return list
+        .where(
+          (m) =>
+              m.receiverId == peerId &&
+              (m.status == MessageStatus.pending ||
+                  m.status == MessageStatus.failed),
+        )
+        .toList();
+  }
+
+  @override
+  Future<List<MeshMessage>> getAllPendingMessages() async {
+    final result = <MeshMessage>[];
+    for (final list in _messagesByPeer.values) {
+      for (final m in list) {
+        if ((m.status == MessageStatus.pending ||
+                m.status == MessageStatus.failed) &&
+            !result.any((r) => r.id == m.id)) {
+          result.add(m);
+        }
+      }
+    }
+    return result;
+  }
+
+  @override
   Future<bool> hasMessage(String messageId) async {
     return _knownMessageIds.contains(messageId);
   }
@@ -73,5 +116,10 @@ class InMemoryMessageStorageService implements MessageStorageService {
     final list = _messagesByPeer[peerId];
     if (list == null || list.isEmpty) return null;
     return list.last;
+  }
+
+  void clear() {
+    _messagesByPeer.clear();
+    _knownMessageIds.clear();
   }
 }

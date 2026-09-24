@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:meshlink/app/theme/app_theme.dart';
 import 'package:meshlink/features/home/presentation/home_screen.dart';
@@ -10,12 +11,15 @@ import 'package:meshlink/features/devices/data/services/device_discovery_service
 import 'package:meshlink/features/devices/providers/device_discovery_controller.dart';
 import 'package:meshlink/features/devices/providers/device_connection_controller.dart';
 
+import 'package:meshlink/features/messages/data/database/app_database.dart';
+import 'package:meshlink/features/messages/data/repositories/message_repository.dart';
 import 'package:meshlink/features/messages/data/services/message_storage_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_messaging_service.dart';
 import 'package:meshlink/features/messages/providers/messaging_controller.dart';
 
 void main() {
-  runApp(const MeshLinkApp());
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const ProviderScope(child: MeshLinkApp()));
 }
 
 /// Root widget that sets up theme and navigation.
@@ -75,6 +79,7 @@ class _MainScaffoldState extends State<MainScaffold> {
   late final DeviceDiscoveryService _service;
   late final DeviceDiscoveryController _discoveryController;
   late final DeviceConnectionController _connectionController;
+  AppDatabase? _db;
   late final MessageStorageService _storageService;
   late final MeshMessagingService _messagingService;
   late final MessagingController _messagingController;
@@ -86,7 +91,13 @@ class _MainScaffoldState extends State<MainScaffold> {
     _discoveryController = DeviceDiscoveryController(_service);
     _connectionController = DeviceConnectionController(_service);
 
-    _storageService = widget.storageService ?? InMemoryMessageStorageService();
+    if (widget.storageService != null) {
+      _storageService = widget.storageService!;
+    } else {
+      _db = AppDatabase();
+      _storageService = DriftMessageRepository(_db!);
+    }
+
     _messagingService =
         widget.messagingService ??
         BleMeshMessagingService(
@@ -94,11 +105,13 @@ class _MainScaffoldState extends State<MainScaffold> {
           storageService: _storageService,
           localId: _discoveryController.localIdentity.id,
         );
+
     _messagingController =
         widget.messagingController ??
         MessagingController(
           messagingService: _messagingService,
           localId: _discoveryController.localIdentity.id,
+          connectionController: _connectionController,
         );
 
     _initControllers();
@@ -115,6 +128,7 @@ class _MainScaffoldState extends State<MainScaffold> {
     _connectionController.dispose();
     _messagingController.dispose();
     _messagingService.dispose();
+    _db?.close();
     super.dispose();
   }
 
@@ -167,5 +181,5 @@ class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
   @override
-  Widget build(BuildContext context) => const MeshLinkApp();
+  Widget build(BuildContext context) => const ProviderScope(child: MeshLinkApp());
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:meshlink/features/devices/providers/device_connection_controller.dart';
 import 'package:meshlink/features/messages/data/models/mesh_message.dart';
 import 'package:meshlink/features/messages/data/services/mesh_messaging_service.dart';
 
@@ -8,13 +9,17 @@ class MessagingController extends ChangeNotifier {
   MessagingController({
     required MeshMessagingService messagingService,
     required String localId,
-  }) : _service = messagingService,
-       _currentLocalId = localId {
+    this._connectionController,
+  })  : _service = messagingService,
+        _currentLocalId = localId {
     _incomingSub = _service.incomingMessages.listen(_onIncomingMessage);
     _ackSub = _service.ackReceived.listen(_onAckReceived);
+
+    _connectionController?.addListener(_onConnectionChanged);
   }
 
   final MeshMessagingService _service;
+  final DeviceConnectionController? _connectionController;
   String _currentLocalId;
   final Map<String, List<MeshMessage>> _messagesByPeer = {};
   final Set<String> _knownMessageIds = {};
@@ -35,7 +40,10 @@ class MessagingController extends ChangeNotifier {
     return _messagesByPeer[peerId] ?? [];
   }
 
-  List<String> get conversationPeerIds => _messagesByPeer.keys.toList();
+  List<String> get conversationPeerIds {
+    final set = <String>{..._messagesByPeer.keys};
+    return set.toList();
+  }
 
   MeshMessage? getLastMessage(String peerId) {
     final list = _messagesByPeer[peerId];
@@ -56,26 +64,40 @@ class MessagingController extends ChangeNotifier {
     final trimmed = text.trim();
     if (trimmed.isEmpty) return;
 
+    MeshMessage.validateLength(trimmed);
+
+    final isConnected = _connectionController?.isConnected(peerId) ?? true;
+
     final message = MeshMessage(
       id: MeshMessage.generateId(),
+      conversationId: peerId,
       senderId: _currentLocalId,
       receiverId: peerId,
       text: trimmed,
       timestamp: DateTime.now(),
-      status: MessageStatus.sending,
+      status: isConnected ? MessageStatus.sending : MessageStatus.pending,
+      retryCount: 0,
     );
 
-    // Optimistic addition to UI
+    // Optimistically add to UI
     _addMessageLocally(peerId, message);
     if (hasListeners) notifyListeners();
 
-    final success = await _service.sendMessage(message);
-    _updateStatusLocally(
-      peerId,
-      message.id,
-      success ? MessageStatus.sent : MessageStatus.failed,
-    );
-    if (hasListeners) notifyListeners();
+    if (isConnected) {
+      final success = await _service.sendMessage(message);
+      if (!success) {
+        // If send failed, check if retry max reached
+        final status = message.retryCount >= MeshMessage.maxRetryLimit
+            ? MessageStatus.failed
+            : MessageStatus.pending;
+        _updateStatusLocally(peerId, message.id, status);
+      }
+    } else {
+      // Offline: send to service which saves as pending
+      await _service.sendMessage(message);
+    }
+
+    await loadMessages(peerId);
   }
 
   Future<void> retryMessage(MeshMessage message) async {
@@ -83,20 +105,27 @@ class MessagingController extends ChangeNotifier {
     _updateStatusLocally(peerId, message.id, MessageStatus.sending);
     if (hasListeners) notifyListeners();
 
-    final success = await _service.sendMessage(message);
-    _updateStatusLocally(
-      peerId,
-      message.id,
-      success ? MessageStatus.sent : MessageStatus.failed,
-    );
-    if (hasListeners) notifyListeners();
+    await _service.retryMessage(message);
+    await loadMessages(peerId);
+  }
+
+  void _onConnectionChanged() async {
+    final activePeer = _connectionController?.deviceId;
+    final isConnected =
+        _connectionController?.status == ConnectionStatus.connected;
+    if (isConnected && activePeer != null) {
+      await _service.flushPendingMessages(activePeer);
+      await loadMessages(activePeer);
+    }
   }
 
   void _onIncomingMessage(MeshMessage message) {
-    if (_knownMessageIds.contains(message.id)) return;
-    _knownMessageIds.add(message.id);
+    final peerId = message.conversationId.isNotEmpty
+        ? message.conversationId
+        : (message.senderId == _currentLocalId
+            ? message.receiverId
+            : message.senderId);
 
-    final peerId = message.senderId;
     _addMessageLocally(peerId, message);
     if (hasListeners) notifyListeners();
   }
@@ -135,6 +164,7 @@ class MessagingController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _connectionController?.removeListener(_onConnectionChanged);
     _incomingSub?.cancel();
     _ackSub?.cancel();
     super.dispose();

@@ -78,7 +78,11 @@ class DeviceConnectionController extends ChangeNotifier {
       notifyListeners();
       return;
     }
-    if (event.deviceId != deviceId) return;
+    if (event.type == 'connected') {
+      deviceId = event.deviceId;
+    } else if (event.deviceId != deviceId) {
+      return;
+    }
     switch (event.type) {
       case 'waitingForAcceptance':
         status = ConnectionStatus.waitingForAcceptance;

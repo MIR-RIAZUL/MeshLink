@@ -50,11 +50,26 @@ class _ConversationScreenState extends State<ConversationScreen> {
     super.dispose();
   }
 
-  void _sendMessage() {
+  void _sendMessage() async {
     final text = _textController.text.trim();
     if (text.isEmpty) return;
+
+    if (text.length > MeshMessage.maxMessageLength) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Message is too long (${text.length} chars). Maximum allowed length is ${MeshMessage.maxMessageLength} characters.',
+            ),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      return;
+    }
+
     _textController.clear();
-    widget.messagingController.sendMessage(widget.peerId, text);
+    await widget.messagingController.sendMessage(widget.peerId, text);
     _scrollToBottom();
   }
 
@@ -118,17 +133,17 @@ class _ConversationScreenState extends State<ConversationScreen> {
                             height: 7,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: isConnected ? Colors.green : Colors.red,
+                              color: isConnected ? Colors.green : Colors.grey,
                             ),
                           ),
                           const SizedBox(width: 5),
                           Text(
                             isConnected
-                                ? 'Connected (Offline Link)'
-                                : 'Disconnected',
+                                ? '● Connected'
+                                : '○ Disconnected',
                             style: TextStyle(
                               fontSize: 11,
-                              color: isConnected ? Colors.green : Colors.red,
+                              color: isConnected ? Colors.green : Colors.grey[600],
                               fontWeight: FontWeight.w500,
                             ),
                           ),
@@ -150,7 +165,7 @@ class _ConversationScreenState extends State<ConversationScreen> {
           ),
           body: Column(
             children: [
-              // Connection Warning Banner
+              // Connection Warning / Offline Queue Banner
               if (!isConnected)
                 Container(
                   width: double.infinity,
@@ -158,17 +173,18 @@ class _ConversationScreenState extends State<ConversationScreen> {
                     horizontal: 16,
                     vertical: 8,
                   ),
-                  color: Colors.red.withValues(alpha: 0.1),
+                  color: Colors.amber.withValues(alpha: 0.15),
                   child: Row(
                     children: [
-                      const Icon(Icons.link_off, color: Colors.red, size: 18),
+                      const Icon(Icons.wifi_off_rounded, color: Colors.amber, size: 18),
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'Direct peer connection lost. Reconnect to send new messages.',
+                          'Peer disconnected. Messages will be saved locally and sent when reconnected.',
                           style: TextStyle(
-                            color: Colors.red[800],
+                            color: Colors.amber[900],
                             fontSize: 12,
+                            fontWeight: FontWeight.w500,
                           ),
                         ),
                       ),
@@ -222,10 +238,12 @@ class _ConversationScreenState extends State<ConversationScreen> {
                           return _MessageBubble(
                             message: msg,
                             isOutgoing: isMe,
-                            onRetry: isMe && msg.status == MessageStatus.failed
+                            onRetry: isMe &&
+                                    (msg.status == MessageStatus.failed ||
+                                        msg.status == MessageStatus.pending)
                                 ? () => widget.messagingController.retryMessage(
-                                    msg,
-                                  )
+                                      msg,
+                                    )
                                 : null,
                           );
                         },
@@ -263,11 +281,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
                             textCapitalization: TextCapitalization.sentences,
                             maxLines: 4,
                             minLines: 1,
-                            enabled: isConnected,
+                            enabled: true, // Always allowed to compose offline messages!
                             decoration: InputDecoration(
                               hintText: isConnected
                                   ? 'Type an offline message...'
-                                  : 'Connect to send messages',
+                                  : 'Type message (will queue offline)...',
                               border: InputBorder.none,
                               contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 16,
@@ -275,16 +293,14 @@ class _ConversationScreenState extends State<ConversationScreen> {
                               ),
                             ),
                             onSubmitted: (_) {
-                              if (_canSend && isConnected) _sendMessage();
+                              if (_canSend) _sendMessage();
                             },
                           ),
                         ),
                       ),
                       const SizedBox(width: 8),
                       IconButton.filled(
-                        onPressed: _canSend && isConnected
-                            ? _sendMessage
-                            : null,
+                        onPressed: _canSend ? _sendMessage : null,
                         icon: const Icon(Icons.send, size: 20),
                       ),
                     ],
@@ -397,6 +413,12 @@ class _MessageBubble extends StatelessWidget {
 
   Widget _buildStatusIcon(BuildContext context) {
     switch (message.status) {
+      case MessageStatus.pending:
+        return const Icon(
+          Icons.access_time_rounded,
+          size: 14,
+          color: Colors.white70,
+        );
       case MessageStatus.sending:
         return const SizedBox(
           width: 10,
