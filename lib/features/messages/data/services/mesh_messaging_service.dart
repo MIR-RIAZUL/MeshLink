@@ -1,9 +1,9 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:meshlink/features/devices/data/services/device_discovery_service.dart';
 import 'package:meshlink/features/messages/data/models/mesh_message.dart';
 import 'package:meshlink/features/messages/data/services/message_storage_service.dart';
+import 'package:meshlink/features/messages/data/services/mesh_router.dart';
 
 abstract class MeshMessagingService {
   Stream<MeshMessage> get incomingMessages;
@@ -21,21 +21,30 @@ class BleMeshMessagingService implements MeshMessagingService {
     required DeviceDiscoveryService discoveryService,
     required MessageStorageService storageService,
     required String localId,
+    MeshRouter? router,
   })  : _service = discoveryService,
         _storage = storageService,
-        _currentLocalId = localId {
+        _currentLocalId = localId,
+        _router = router ??
+            MeshRouter(
+              discoveryService: discoveryService,
+              localId: localId,
+            ) {
     _subscription = _service.events.listen(_handleDiscoveryEvent);
   }
 
   final DeviceDiscoveryService _service;
   final MessageStorageService _storage;
+  final MeshRouter _router;
   String _currentLocalId;
   bool _isFlushing = false;
 
   String get localId => _currentLocalId;
+  MeshRouter get router => _router;
 
   void setLocalId(String id) {
     _currentLocalId = id;
+    _router.setLocalId(id);
   }
 
   StreamSubscription<DeviceDiscoveryEvent>? _subscription;
@@ -65,9 +74,8 @@ class BleMeshMessagingService implements MeshMessagingService {
     final sendingMsg = message.copyWith(status: MessageStatus.sending);
     await _storage.saveMessage(sendingMsg);
 
-    // 2. Transmit wire payload over P2P link
-    final payload = sendingMsg.toWireProtocol();
-    final sent = await _service.sendMessage(message.receiverId, payload);
+    // 2. Transmit via MeshRouter (direct or multi-hop relay)
+    final sent = await _router.routeMessage(sendingMsg);
 
     if (sent) {
       // Sent over wire, waiting for ACK to mark delivered
@@ -76,7 +84,7 @@ class BleMeshMessagingService implements MeshMessagingService {
       _incomingController.add(sentMsg);
       return true;
     } else {
-      // Failed to deliver frame (offline or connection lost during send)
+      // Failed to deliver frame (offline or no path available)
       final newStatus = message.retryCount >= MeshMessage.maxRetryLimit
           ? MessageStatus.failed
           : MessageStatus.pending;
@@ -103,11 +111,11 @@ class BleMeshMessagingService implements MeshMessagingService {
   }
 
   @override
-  Future<void> flushPendingMessages(String peerId) async {
+  Future<void> flushPendingMessages([String? peerId]) async {
     if (_isFlushing) return;
     _isFlushing = true;
     try {
-      final pending = await _storage.getPendingMessages(peerId);
+      final pending = await _storage.getAllPendingMessages();
       for (final msg in pending) {
         await retryMessage(msg);
       }
@@ -127,68 +135,26 @@ class BleMeshMessagingService implements MeshMessagingService {
     if (event is! MessageReceivedEvent) return;
 
     try {
-      final data = jsonDecode(event.payload) as Map<String, dynamic>;
-      final type = data['type'] as String?;
+      final result = await _router.handleIncomingPayload(
+        event.payload,
+        fromPeerId: event.peerId,
+      );
 
-      if (type == 'message') {
-        final messageId = data['messageId'] as String;
-        final senderId = data['senderId'] as String;
-        final receiverId = data['receiverId'] as String;
-        final text = (data['text'] as String? ?? '').trim();
-        final timestamp =
-            DateTime.tryParse(data['timestamp'] as String? ?? '') ??
-            DateTime.now();
-
-        // Enforce maximum size limit on incoming text
-        if (text.length > MeshMessage.maxMessageLength) {
-          return;
-        }
-
-        final conversationId = senderId; // Conversation for receiver is sender ID
-
-        // Duplicate protection
-        if (await _storage.hasMessage(messageId)) {
-          // Message already stored locally, but reply with ACK frame in case previous ACK was lost
-          final ackPayload = MeshMessage.createAckPayload(
-            messageId: messageId,
-            conversationId: conversationId,
-            senderId: _currentLocalId,
-            receiverId: senderId,
-          );
-          await _service.sendMessage(senderId, ackPayload);
-          return;
-        }
-
-        final receivedMessage = MeshMessage(
-          id: messageId,
-          conversationId: conversationId,
-          senderId: senderId,
-          receiverId: receiverId,
-          text: text,
-          timestamp: timestamp,
-          status: MessageStatus.delivered,
-        );
-
-        await _storage.saveMessage(receivedMessage);
-        _incomingController.add(receivedMessage);
-
-        // Send ACK back to sender
-        final ackPayload = MeshMessage.createAckPayload(
-          messageId: messageId,
-          conversationId: conversationId,
-          senderId: _currentLocalId,
-          receiverId: senderId,
-        );
-        await _service.sendMessage(senderId, ackPayload);
-      } else if (type == 'ack') {
-        final messageId = data['messageId'] as String?;
-        if (messageId != null) {
+      switch (result) {
+        case LocalMessageDelivery(:final message):
+          await _storage.saveMessage(message);
+          _incomingController.add(message);
+        case LocalAckDelivery(:final messageId):
           await _storage.updateMessageStatus(
             messageId,
             MessageStatus.delivered,
           );
           _ackController.add(messageId);
-        }
+        case RelayedMessage():
+        case RelayedAck():
+        case DroppedPayload():
+          // Relayed/dropped appropriately by MeshRouter
+          break;
       }
     } catch (_) {
       // Ignore malformed payloads
@@ -200,5 +166,6 @@ class BleMeshMessagingService implements MeshMessagingService {
     await _subscription?.cancel();
     await _incomingController.close();
     await _ackController.close();
+    await _router.dispose();
   }
 }

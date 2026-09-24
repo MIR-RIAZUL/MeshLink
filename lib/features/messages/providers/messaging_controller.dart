@@ -66,7 +66,10 @@ class MessagingController extends ChangeNotifier {
 
     MeshMessage.validateLength(trimmed);
 
-    final isConnected = _connectionController?.isConnected(peerId) ?? true;
+    final ctrl = _connectionController;
+    final hasConnection = ctrl == null ||
+        ctrl.isConnected(peerId) ||
+        ctrl.hasAnyConnection;
 
     final message = MeshMessage(
       id: MeshMessage.generateId(),
@@ -75,7 +78,7 @@ class MessagingController extends ChangeNotifier {
       receiverId: peerId,
       text: trimmed,
       timestamp: DateTime.now(),
-      status: isConnected ? MessageStatus.sending : MessageStatus.pending,
+      status: hasConnection ? MessageStatus.sending : MessageStatus.pending,
       retryCount: 0,
     );
 
@@ -83,7 +86,7 @@ class MessagingController extends ChangeNotifier {
     _addMessageLocally(peerId, message);
     if (hasListeners) notifyListeners();
 
-    if (isConnected) {
+    if (hasConnection) {
       final success = await _service.sendMessage(message);
       if (!success) {
         // If send failed, check if retry max reached

@@ -25,9 +25,16 @@ class DeviceConnectionController extends ChangeNotifier {
   String? errorMessage;
   NearbyDevice? incomingDevice;
   DateTime? connectedSince;
+  final Set<String> _connectedDevices = {};
+
+  Set<String> get connectedDevices => Set.unmodifiable(_connectedDevices);
 
   bool isConnected(String id) =>
-      status == ConnectionStatus.connected && deviceId == id;
+      _connectedDevices.contains(id) ||
+      (status == ConnectionStatus.connected && deviceId == id);
+
+  bool get hasAnyConnection =>
+      _connectedDevices.isNotEmpty || status == ConnectionStatus.connected;
 
   Future<void> connect(NearbyDevice device) async {
     deviceId = device.id;
@@ -78,19 +85,35 @@ class DeviceConnectionController extends ChangeNotifier {
       notifyListeners();
       return;
     }
+
     if (event.type == 'connected') {
+      _connectedDevices.add(event.deviceId);
       deviceId = event.deviceId;
-    } else if (event.deviceId != deviceId) {
+      status = ConnectionStatus.connected;
+      connectedSince = DateTime.now();
+      notifyListeners();
       return;
     }
+
+    if (event.type == 'disconnected') {
+      _connectedDevices.remove(event.deviceId);
+      if (deviceId == event.deviceId) {
+        if (_connectedDevices.isNotEmpty) {
+          deviceId = _connectedDevices.last;
+          status = ConnectionStatus.connected;
+        } else {
+          status = ConnectionStatus.lost;
+        }
+      }
+      notifyListeners();
+      return;
+    }
+
+    if (event.deviceId != deviceId) return;
+
     switch (event.type) {
       case 'waitingForAcceptance':
         status = ConnectionStatus.waitingForAcceptance;
-      case 'connected':
-        status = ConnectionStatus.connected;
-        connectedSince = DateTime.now();
-      case 'disconnected':
-        status = ConnectionStatus.lost;
       case 'connectionFailed':
         status = ConnectionStatus.failed;
         errorMessage = event.message;

@@ -78,8 +78,9 @@ class BluetoothStateChanged extends DeviceDiscoveryEvent {
 }
 
 class MessageReceivedEvent extends DeviceDiscoveryEvent {
-  const MessageReceivedEvent(this.payload);
+  const MessageReceivedEvent(this.payload, {this.peerId});
   final String payload;
+  final String? peerId;
 }
 
 class DiscoveryCompleted extends DeviceDiscoveryEvent {

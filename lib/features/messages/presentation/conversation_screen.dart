@@ -89,9 +89,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
         widget.connectionController,
       ]),
       builder: (context, _) {
-        final isConnected = widget.connectionController.isConnected(
+        final isDirectConnected = widget.connectionController.isConnected(
           widget.peerId,
         );
+        final hasRelayConnection = !isDirectConnected &&
+            widget.connectionController.hasAnyConnection;
         final messages = widget.messagingController.getMessages(widget.peerId);
 
         return Scaffold(
@@ -133,17 +135,27 @@ class _ConversationScreenState extends State<ConversationScreen> {
                             height: 7,
                             decoration: BoxDecoration(
                               shape: BoxShape.circle,
-                              color: isConnected ? Colors.green : Colors.grey,
+                              color: isDirectConnected
+                                  ? Colors.green
+                                  : (hasRelayConnection
+                                      ? Colors.teal
+                                      : Colors.grey),
                             ),
                           ),
                           const SizedBox(width: 5),
                           Text(
-                            isConnected
-                                ? '● Connected'
-                                : '○ Disconnected',
+                            isDirectConnected
+                                ? '● Direct Link'
+                                : (hasRelayConnection
+                                    ? '● Mesh Relay Active'
+                                    : '○ Disconnected'),
                             style: TextStyle(
                               fontSize: 11,
-                              color: isConnected ? Colors.green : Colors.grey[600],
+                              color: isDirectConnected
+                                  ? Colors.green
+                                  : (hasRelayConnection
+                                      ? Colors.teal
+                                      : Colors.grey[600]),
                               fontWeight: FontWeight.w500,
                             ),
                           ),
@@ -165,8 +177,33 @@ class _ConversationScreenState extends State<ConversationScreen> {
           ),
           body: Column(
             children: [
-              // Connection Warning / Offline Queue Banner
-              if (!isConnected)
+              // Connection Status / Multi-Hop Relay Banner
+              if (!isDirectConnected && hasRelayConnection)
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  color: Colors.teal.withValues(alpha: 0.15),
+                  child: Row(
+                    children: [
+                      const Icon(Icons.alt_route_rounded, color: Colors.teal, size: 18),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Direct link unavailable. Messages will be routed via connected MeshLink relay peers.',
+                          style: TextStyle(
+                            color: Colors.teal[900],
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                )
+              else if (!isDirectConnected && !hasRelayConnection)
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.symmetric(
@@ -283,9 +320,11 @@ class _ConversationScreenState extends State<ConversationScreen> {
                             minLines: 1,
                             enabled: true, // Always allowed to compose offline messages!
                             decoration: InputDecoration(
-                              hintText: isConnected
+                              hintText: isDirectConnected
                                   ? 'Type an offline message...'
-                                  : 'Type message (will queue offline)...',
+                                  : (hasRelayConnection
+                                      ? 'Type message (via mesh relay)...'
+                                      : 'Type message (will queue offline)...'),
                               border: InputBorder.none,
                               contentPadding: const EdgeInsets.symmetric(
                                 horizontal: 16,
@@ -368,6 +407,18 @@ class _MessageBubble extends StatelessWidget {
             Row(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (message.hopCount > 0) ...[
+                  Text(
+                    'via ${message.hopCount} hop${message.hopCount > 1 ? 's' : ''} • ',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: isOutgoing
+                          ? theme.colorScheme.onPrimary.withValues(alpha: 0.65)
+                          : Colors.grey[500],
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
                 Text(
                   timeStr,
                   style: TextStyle(

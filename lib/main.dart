@@ -15,6 +15,7 @@ import 'package:meshlink/features/messages/data/database/app_database.dart';
 import 'package:meshlink/features/messages/data/repositories/message_repository.dart';
 import 'package:meshlink/features/messages/data/services/message_storage_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_messaging_service.dart';
+import 'package:meshlink/features/messages/data/services/mesh_router.dart';
 import 'package:meshlink/features/messages/providers/messaging_controller.dart';
 
 void main() {
@@ -98,12 +99,19 @@ class _MainScaffoldState extends State<MainScaffold> {
       _storageService = DriftMessageRepository(_db!);
     }
 
+    final router = MeshRouter(
+      discoveryService: _service,
+      localId: _discoveryController.localIdentity.id,
+      getConnectedPeers: () => _connectionController.connectedDevices,
+    );
+
     _messagingService =
         widget.messagingService ??
         BleMeshMessagingService(
           discoveryService: _service,
           storageService: _storageService,
           localId: _discoveryController.localIdentity.id,
+          router: router,
         );
 
     _messagingController =
