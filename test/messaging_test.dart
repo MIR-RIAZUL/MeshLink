@@ -9,6 +9,7 @@ import 'package:meshlink/features/messages/data/models/mesh_message.dart';
 import 'package:meshlink/features/messages/data/repositories/message_repository.dart';
 import 'package:meshlink/features/messages/data/services/message_storage_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_messaging_service.dart';
+import 'package:meshlink/features/messages/data/services/mesh_crypto_service.dart';
 import 'package:meshlink/features/messages/providers/messaging_controller.dart';
 
 class MockDiscoveryService implements DeviceDiscoveryService {
@@ -269,14 +270,19 @@ void main() {
     late BleMeshMessagingService messagingService;
     late DeviceConnectionController connectionController;
     late MessagingController controller;
+    late MeshCryptoService localCrypto;
 
-    setUp(() {
+    setUp(() async {
       mockDiscovery = MockDiscoveryService();
       storage = InMemoryMessageStorageService();
+      localCrypto = MeshCryptoService(keyStore: InMemoryKeyMaterialStore());
+      final remoteCrypto = MeshCryptoService(keyStore: InMemoryKeyMaterialStore());
+      localCrypto.rememberPeerKey('ML-REMOTE', await remoteCrypto.localPublicKey());
       messagingService = BleMeshMessagingService(
         discoveryService: mockDiscovery,
         storageService: storage,
         localId: 'ML-LOCAL',
+        cryptoService: localCrypto,
       );
       connectionController = DeviceConnectionController(mockDiscovery);
       controller = MessagingController(
@@ -329,7 +335,7 @@ void main() {
       final messages = controller.getMessages('ML-REMOTE');
       expect(messages.first.status, MessageStatus.sent);
       expect(mockDiscovery.sentPayloads.length, 1);
-      expect(mockDiscovery.sentPayloads.first.contains('Queued message'), isTrue);
+      expect(mockDiscovery.sentPayloads.first.contains('Queued message'), isFalse);
     });
 
     test('Receiving ACK frame updates status to delivered', () async {

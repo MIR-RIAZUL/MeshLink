@@ -4,6 +4,10 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+dependencies {
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+}
+
 android {
     namespace = "com.example.meshlink"
     compileSdk = flutter.compileSdkVersion

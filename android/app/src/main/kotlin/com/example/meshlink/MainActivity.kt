@@ -34,6 +34,8 @@ import android.os.Looper
 import android.os.ParcelUuid
 import android.provider.Settings
 import android.util.Base64
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -45,6 +47,7 @@ import java.security.SecureRandom
 class MainActivity : FlutterActivity() {
     companion object {
         private const val METHOD_CHANNEL = "meshlink/device_discovery"
+        private const val SECURITY_CHANNEL = "meshlink/security"
         private const val EVENT_CHANNEL = "meshlink/device_discovery_events"
         private const val REQUEST_NEARBY_PERMISSIONS = 42
         private const val REQUEST_ENABLE_BT = 43
@@ -105,6 +108,8 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, METHOD_CHANNEL)
             .setMethodCallHandler(::onMethodCall)
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SECURITY_CHANNEL)
+            .setMethodCallHandler(::onSecurityMethodCall)
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, EVENT_CHANNEL)
             .setStreamHandler(object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -120,6 +125,32 @@ class MainActivity : FlutterActivity() {
             val filter = IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
             registerReceiver(bluetoothStateReceiver, filter)
             isReceiverRegistered = true
+        }
+    }
+
+    private fun onSecurityMethodCall(call: MethodCall, result: MethodChannel.Result) {
+        try {
+            val preferences = EncryptedSharedPreferences.create(
+                this,
+                "meshlink_crypto_identity",
+                MasterKey.Builder(this).setKeyScheme(MasterKey.KeyScheme.AES256_GCM).build(),
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            )
+            when (call.method) {
+                "readIdentity" -> result.success(preferences.getString("x25519_identity", null))
+                "writeIdentity" -> {
+                    val value = call.argument<String>("value")
+                    if (value == null) result.error("invalid_argument", "Missing identity", null)
+                    else {
+                        preferences.edit().putString("x25519_identity", value).commit()
+                        result.success(null)
+                    }
+                }
+                else -> result.notImplemented()
+            }
+        } catch (_: Exception) {
+            result.error("secure_storage_failure", "Secure identity storage unavailable", null)
         }
     }
 
@@ -756,5 +787,4 @@ class MainActivity : FlutterActivity() {
         super.onDestroy()
     }
 }
-
 

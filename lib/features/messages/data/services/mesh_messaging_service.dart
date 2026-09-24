@@ -4,6 +4,7 @@ import 'package:meshlink/features/devices/data/services/device_discovery_service
 import 'package:meshlink/features/messages/data/models/mesh_message.dart';
 import 'package:meshlink/features/messages/data/services/message_storage_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_router.dart';
+import 'package:meshlink/features/messages/data/services/mesh_crypto_service.dart';
 
 abstract class MeshMessagingService {
   Stream<MeshMessage> get incomingMessages;
@@ -22,9 +23,11 @@ class BleMeshMessagingService implements MeshMessagingService {
     required MessageStorageService storageService,
     required String localId,
     MeshRouter? router,
+    MeshCryptoService? cryptoService,
   })  : _service = discoveryService,
         _storage = storageService,
         _currentLocalId = localId,
+        _crypto = cryptoService ?? MeshCryptoService(),
         _router = router ??
             MeshRouter(
               discoveryService: discoveryService,
@@ -36,6 +39,7 @@ class BleMeshMessagingService implements MeshMessagingService {
   final DeviceDiscoveryService _service;
   final MessageStorageService _storage;
   final MeshRouter _router;
+  final MeshCryptoService _crypto;
   String _currentLocalId;
   bool _isFlushing = false;
 
@@ -74,8 +78,8 @@ class BleMeshMessagingService implements MeshMessagingService {
     final sendingMsg = message.copyWith(status: MessageStatus.sending);
     await _storage.saveMessage(sendingMsg);
 
-    // 2. Transmit via MeshRouter (direct or multi-hop relay)
-    final sent = await _router.routeMessage(sendingMsg);
+    // 2. Transmit only an authenticated encrypted wire packet.
+    final sent = await _sendEncrypted(sendingMsg);
 
     if (sent) {
       // Sent over wire, waiting for ACK to mark delivered
@@ -144,6 +148,10 @@ class BleMeshMessagingService implements MeshMessagingService {
         case LocalMessageDelivery(:final message):
           await _storage.saveMessage(message);
           _incomingController.add(message);
+        case EncryptedMessageDelivery(:final payload):
+          await _deliverEncryptedMessage(payload);
+        case LocalKeyExchangeDelivery(:final payload):
+          await _handleKeyExchange(payload);
         case LocalAckDelivery(:final messageId):
           await _storage.updateMessageStatus(
             messageId,
@@ -158,6 +166,114 @@ class BleMeshMessagingService implements MeshMessagingService {
       }
     } catch (_) {
       // Ignore malformed payloads
+    }
+  }
+
+  Future<bool> _sendEncrypted(MeshMessage message) async {
+    if (!_crypto.hasPeerKey(message.destinationId)) {
+      await _requestPeerKey(message.destinationId, message.id);
+      return false;
+    }
+    try {
+      final encrypted = await _crypto.encrypt(
+        messageId: message.id,
+        originId: message.originId,
+        destinationId: message.destinationId,
+        text: message.text,
+      );
+      return await _router.routeEncryptedPayload({
+        'type': 'encrypted_message',
+        'version': MeshCryptoService.protocolVersion,
+        'messageId': message.id,
+        'originId': message.originId,
+        'destinationId': message.destinationId,
+        'senderId': message.senderId,
+        'receiverId': message.receiverId,
+        'conversationId': message.conversationId,
+        'timestamp': message.timestamp.toIso8601String(),
+        'ttl': message.ttl,
+        'hopCount': message.hopCount,
+        'nonce': encrypted.nonce,
+        'ciphertext': encrypted.ciphertext,
+        'mac': encrypted.mac,
+      });
+    } on MeshCryptoException {
+      return false;
+    }
+  }
+
+  Future<void> _requestPeerKey(String destinationId, String requestId) async {
+    try {
+      await _router.routeEncryptedPayload({
+        'type': 'key_request',
+        'version': MeshCryptoService.protocolVersion,
+        'requestId': requestId,
+        'originId': _currentLocalId,
+        'destinationId': destinationId,
+        'ttl': MeshMessage.defaultTtl,
+        'hopCount': 0,
+        'publicKey': await _crypto.localPublicKey(),
+      });
+    } catch (_) {
+      // The message remains queued and will retry after a connection event.
+    }
+  }
+
+  Future<void> _handleKeyExchange(Map<String, dynamic> payload) async {
+    final type = payload['type'] as String;
+    final origin = payload['originId'] as String;
+    final publicKey = payload['publicKey'] as String;
+    try {
+      _crypto.rememberPeerKey(origin, publicKey);
+      if (type == 'key_request') {
+        await _router.routeEncryptedPayload({
+          'type': 'key_response',
+          'version': MeshCryptoService.protocolVersion,
+          'requestId': payload['requestId'],
+          'originId': _currentLocalId,
+          'destinationId': origin,
+          'ttl': MeshMessage.defaultTtl,
+          'hopCount': 0,
+          'publicKey': await _crypto.localPublicKey(),
+        });
+      } else {
+        await flushPendingMessages();
+      }
+    } catch (_) {
+      // Invalid key packets are ignored without exposing crypto details.
+    }
+  }
+
+  Future<void> _deliverEncryptedMessage(Map<String, dynamic> payload) async {
+    try {
+      final text = await _crypto.decrypt(
+        messageId: payload['messageId'] as String,
+        originId: payload['originId'] as String,
+        destinationId: payload['destinationId'] as String,
+        nonce: payload['nonce'] as String,
+        ciphertext: payload['ciphertext'] as String,
+        mac: payload['mac'] as String,
+      );
+      if (text.length > MeshMessage.maxMessageLength) return;
+      final message = MeshMessage(
+        id: payload['messageId'] as String,
+        conversationId: payload['originId'] as String,
+        senderId: payload['senderId'] as String? ?? payload['originId'] as String,
+        receiverId: payload['receiverId'] as String? ?? _currentLocalId,
+        originId: payload['originId'] as String,
+        destinationId: payload['destinationId'] as String,
+        text: text,
+        timestamp: DateTime.tryParse(payload['timestamp'] as String? ?? '') ?? DateTime.now(),
+        status: MessageStatus.delivered,
+        ttl: payload['ttl'] as int? ?? MeshMessage.defaultTtl,
+        hopCount: payload['hopCount'] as int? ?? 0,
+      );
+      await _storage.saveMessage(message);
+      _incomingController.add(message);
+    } on MeshCryptoException {
+      // Authentication failures are rejected; no plaintext is delivered.
+    } catch (_) {
+      // Malformed encrypted payload.
     }
   }
 
