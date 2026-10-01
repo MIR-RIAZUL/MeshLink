@@ -23,6 +23,22 @@ abstract class MessageRepository implements MessageStorageService {
   Future<List<MeshMessage>> getPendingMessages(String peerId);
   @override
   Future<List<MeshMessage>> getAllPendingMessages();
+
+  // Replay Protection Primitives
+  Future<bool> checkAndMarkSeen({
+    required String packetType,
+    required String originId,
+    required String packetId,
+  });
+
+  Future<int> pruneExpiredPackets(Duration maxAge);
+
+  // Peer Identity Primitives
+  Future<PeerIdentityEntry?> getPeerIdentity(String peerId);
+
+  Future<void> savePeerIdentity(PeerIdentityEntry entry);
+
+  Future<void> updateTrustStatus(String peerId, String status);
 }
 
 class DriftMessageRepository implements MessageRepository {
@@ -90,6 +106,49 @@ class DriftMessageRepository implements MessageRepository {
   Future<List<MeshMessage>> getAllPendingMessages() async {
     final entries = await _db.getAllPendingMessages();
     return entries.map(_entryToMessage).toList();
+  }
+
+  @override
+  Future<bool> checkAndMarkSeen({
+    required String packetType,
+    required String originId,
+    required String packetId,
+  }) {
+    return _db.checkAndMarkSeen(
+      packetType: packetType,
+      originId: originId,
+      packetId: packetId,
+    );
+  }
+
+  @override
+  Future<int> pruneExpiredPackets(Duration maxAge) {
+    return _db.pruneExpiredPackets(maxAge);
+  }
+
+  @override
+  Future<PeerIdentityEntry?> getPeerIdentity(String peerId) {
+    return _db.getPeerIdentity(peerId);
+  }
+
+  @override
+  Future<void> savePeerIdentity(PeerIdentityEntry entry) async {
+    await _db.savePeerIdentity(
+      PeerIdentitiesTableCompanion(
+        peerId: Value(entry.peerId),
+        identityPublicKey: Value(entry.identityPublicKey),
+        safetyNumber: Value(entry.safetyNumber),
+        trustStatus: Value(entry.trustStatus),
+        protocolVersion: Value(entry.protocolVersion),
+        firstSeenAt: Value(entry.firstSeenAt),
+        lastSeenAt: Value(entry.lastSeenAt),
+      ),
+    );
+  }
+
+  @override
+  Future<void> updateTrustStatus(String peerId, String status) async {
+    await _db.updateTrustStatus(peerId, status);
   }
 
   MeshMessage _entryToMessage(LocalMessageEntry entry) {

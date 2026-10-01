@@ -43,6 +43,7 @@ import io.flutter.plugin.common.MethodCall
 import io.flutter.plugin.common.MethodChannel
 import java.nio.charset.StandardCharsets
 import java.security.SecureRandom
+import org.json.JSONObject
 
 class MainActivity : FlutterActivity() {
     companion object {
@@ -145,6 +146,45 @@ class MainActivity : FlutterActivity() {
                     else {
                         preferences.edit().putString("x25519_identity", value).commit()
                         result.success(null)
+                    }
+                }
+                "readIdentityV2" -> {
+                    val stored = preferences.getString("ed25519_identity_v2", null)
+                    if (stored != null) {
+                        try {
+                            val json = JSONObject(stored)
+                            val schema = json.optInt("schema", -1)
+                            val algorithm = json.optString("algorithm", "")
+                            if (schema == 2 && algorithm == "ed25519") {
+                                result.success(stored)
+                            } else {
+                                result.error("invalid_identity_format", "Identity does not match Ed25519 v2 schema", null)
+                            }
+                        } catch (e: Exception) {
+                            result.error("invalid_identity_format", "Malformed identity JSON", null)
+                        }
+                    } else {
+                        result.success(null)
+                    }
+                }
+                "writeIdentityV2" -> {
+                    val value = call.argument<String>("value")
+                    if (value == null) {
+                        result.error("invalid_argument", "Missing identity", null)
+                    } else {
+                        try {
+                            val json = JSONObject(value)
+                            val schema = json.optInt("schema", -1)
+                            val algorithm = json.optString("algorithm", "")
+                            if (schema == 2 && algorithm == "ed25519") {
+                                preferences.edit().putString("ed25519_identity_v2", value).commit()
+                                result.success(null)
+                            } else {
+                                result.error("invalid_identity_format", "Identity must have schema=2 and algorithm=ed25519", null)
+                            }
+                        } catch (e: Exception) {
+                            result.error("invalid_identity_format", "Malformed identity JSON", null)
+                        }
                     }
                 }
                 else -> result.notImplemented()
