@@ -5,6 +5,7 @@ import 'package:meshlink/features/devices/providers/device_connection_controller
 import 'package:meshlink/features/devices/providers/device_discovery_controller.dart';
 import 'package:meshlink/features/messages/data/database/app_database.dart';
 import 'package:meshlink/features/messages/data/repositories/message_repository.dart';
+import 'package:meshlink/features/messages/data/services/ephemeral_session_service.dart';
 import 'package:meshlink/features/messages/data/services/handshake_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_identity_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_messaging_service.dart';
@@ -26,9 +27,14 @@ final meshIdentityServiceProvider = Provider<MeshIdentityService>((ref) {
   return MeshIdentityService();
 });
 
+final ephemeralSessionServiceProvider = Provider<EphemeralSessionService>((ref) {
+  return EphemeralSessionService();
+});
+
 final handshakeServiceProvider = Provider<HandshakeService>((ref) {
   final identityService = ref.watch(meshIdentityServiceProvider);
   final repository = ref.watch(messageRepositoryProvider);
+  final sessionService = ref.watch(ephemeralSessionServiceProvider);
   final discoveryController = ref.watch(
     deviceDiscoveryControllerProvider.notifier,
   );
@@ -36,6 +42,8 @@ final handshakeServiceProvider = Provider<HandshakeService>((ref) {
     identityService: identityService,
     localId: discoveryController.localIdentity.id,
     peerRepository: repository,
+    ephemeralKeyProvider: sessionService,
+    sessionService: sessionService,
   );
 });
 

@@ -5,8 +5,10 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:meshlink/features/messages/data/models/ephemeral_session.dart';
 import 'package:meshlink/features/messages/data/models/handshake_packets.dart';
 import 'package:meshlink/features/messages/data/repositories/message_repository.dart';
+import 'package:meshlink/features/messages/data/services/ephemeral_session_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_identity_service.dart';
 
 /// Deterministic, canonical binary transcript encoder for Phase 7 v2 handshake.
@@ -167,17 +169,18 @@ class HandshakeTranscriptEncoder {
 
 /// Interface for providing ephemeral X25519 public keys during handshake.
 ///
-/// In Step 3, ephemeral public keys are bound into the signed transcripts and
-/// message packets. Ephemeral key agreement, shared-secret derivation, and HKDF
-/// session keys are strictly deferred to Step 4.
+/// Implementations:
+/// - [EphemeralSessionService] (Step 4): Real X25519 key pair generation with
+///   ECDH + HKDF session key derivation.
+/// - [StaticEphemeralKeyProvider]: Test-only provider with a fixed key.
 abstract class EphemeralKeyProvider {
   Future<Uint8List> getEphemeralPublicKey();
 }
 
-/// Step 4 placeholder providing genuine 32-byte X25519 public keys for protocol
-/// integrity without establishing or storing ephemeral sessions.
-class Step4EphemeralKeyPlaceholder implements EphemeralKeyProvider {
-  Step4EphemeralKeyPlaceholder([Uint8List? key]) : _key = key;
+/// Test-only [EphemeralKeyProvider] supplying a fixed or randomly generated
+/// 32-byte X25519 public key without session establishment.
+class StaticEphemeralKeyProvider implements EphemeralKeyProvider {
+  StaticEphemeralKeyProvider([Uint8List? key]) : _key = key;
 
   final Uint8List? _key;
   static final _x25519 = X25519();
@@ -206,20 +209,26 @@ class HandshakeService {
     MessageRepository? peerRepository,
     Ed25519? ed25519,
     EphemeralKeyProvider? ephemeralKeyProvider,
+    EphemeralSessionService? sessionService,
   })  : _identityService = identityService,
         _localId = localId,
         _peerRepository = peerRepository,
         _ed25519 = ed25519 ?? Ed25519(),
         _ephemeralKeyProvider =
-            ephemeralKeyProvider ?? Step4EphemeralKeyPlaceholder();
+            ephemeralKeyProvider ?? StaticEphemeralKeyProvider(),
+        _sessionService = sessionService;
 
   final MeshIdentityService _identityService;
   String _localId;
   final MessageRepository? _peerRepository;
   final Ed25519 _ed25519;
   final EphemeralKeyProvider _ephemeralKeyProvider;
+  final EphemeralSessionService? _sessionService;
 
   final Map<String, HandshakePendingRequest> _pendingRequests = {};
+
+  /// Returns the injected [EphemeralSessionService], if any.
+  EphemeralSessionService? get sessionService => _sessionService;
 
   String get localId => _localId;
 
@@ -576,6 +585,83 @@ class HandshakeService {
       peerEphemeralPublicKey: responderEphBytes,
       timestamp: response.timestamp,
     );
+  }
+
+  /// Completes the ephemeral session as the handshake **initiator** (A).
+  ///
+  /// Called after [verifyKeyResponse] succeeds. Uses the original pending
+  /// request's ephemeral key pair and the responder's ephemeral public key
+  /// from the verified response to derive directional session keys.
+  ///
+  /// Requires an [EphemeralSessionService] to be injected via the constructor.
+  Future<EphemeralSession> completeSessionAsInitiator({
+    required HandshakeVerificationResult verifiedResponse,
+    required HandshakePendingRequest originalRequest,
+  }) async {
+    final svc = _sessionService;
+    if (svc == null) {
+      throw const HandshakeException(
+        HandshakeErrorCode.sessionDerivationFailed,
+        'No EphemeralSessionService available for session derivation',
+      );
+    }
+
+    final localIdPubKey = await _identityService.getIdentityPublicKeyBytes();
+
+    try {
+      return await svc.deriveSessionKeys(
+        requestId: verifiedResponse.requestId,
+        localId: _localId,
+        peerId: verifiedResponse.originId,
+        isInitiator: true,
+        peerEphemeralPublicKey: verifiedResponse.peerEphemeralPublicKey,
+        localIdentityPublicKey: localIdPubKey,
+        peerIdentityPublicKey: verifiedResponse.peerIdentityPublicKey,
+      );
+    } on EphemeralSessionException catch (e) {
+      throw HandshakeException(
+        HandshakeErrorCode.sessionDerivationFailed,
+        'Session derivation failed (initiator): ${e.message}',
+      );
+    }
+  }
+
+  /// Completes the ephemeral session as the handshake **responder** (B).
+  ///
+  /// Called after [createKeyResponse] succeeds. Uses the responder's ephemeral
+  /// key pair and the initiator's ephemeral public key from the verified
+  /// request to derive directional session keys.
+  ///
+  /// Requires an [EphemeralSessionService] to be injected via the constructor.
+  Future<EphemeralSession> completeSessionAsResponder({
+    required HandshakeVerificationResult verifiedRequest,
+  }) async {
+    final svc = _sessionService;
+    if (svc == null) {
+      throw const HandshakeException(
+        HandshakeErrorCode.sessionDerivationFailed,
+        'No EphemeralSessionService available for session derivation',
+      );
+    }
+
+    final localIdPubKey = await _identityService.getIdentityPublicKeyBytes();
+
+    try {
+      return await svc.deriveSessionKeys(
+        requestId: verifiedRequest.requestId,
+        localId: _localId,
+        peerId: verifiedRequest.originId,
+        isInitiator: false,
+        peerEphemeralPublicKey: verifiedRequest.peerEphemeralPublicKey,
+        localIdentityPublicKey: localIdPubKey,
+        peerIdentityPublicKey: verifiedRequest.peerIdentityPublicKey,
+      );
+    } on EphemeralSessionException catch (e) {
+      throw HandshakeException(
+        HandshakeErrorCode.sessionDerivationFailed,
+        'Session derivation failed (responder): ${e.message}',
+      );
+    }
   }
 
   /// Returns pending request matching [requestId], if any.

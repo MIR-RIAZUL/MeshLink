@@ -13,6 +13,7 @@ enum HandshakeErrorCode {
   peerIdentityMismatch,
   invalidKeyLength,
   invalidEncoding,
+  sessionDerivationFailed,
 }
 
 /// Structured exception thrown on handshake verification, validation, or protocol failures.
