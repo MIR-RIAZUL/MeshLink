@@ -5,6 +5,7 @@ import 'package:meshlink/features/devices/providers/device_connection_controller
 import 'package:meshlink/features/devices/providers/device_discovery_controller.dart';
 import 'package:meshlink/features/messages/data/database/app_database.dart';
 import 'package:meshlink/features/messages/data/repositories/message_repository.dart';
+import 'package:meshlink/features/messages/data/services/mesh_identity_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_messaging_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_router.dart';
 import 'package:meshlink/features/messages/providers/messaging_controller.dart';
@@ -18,6 +19,10 @@ final appDatabaseProvider = Provider<AppDatabase>((ref) {
 final messageRepositoryProvider = Provider<MessageRepository>((ref) {
   final db = ref.watch(appDatabaseProvider);
   return DriftMessageRepository(db);
+});
+
+final meshIdentityServiceProvider = Provider<MeshIdentityService>((ref) {
+  return MeshIdentityService();
 });
 
 final deviceDiscoveryServiceProvider = Provider<DeviceDiscoveryService>((ref) {
