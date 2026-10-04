@@ -5,6 +5,7 @@ import 'package:meshlink/features/devices/providers/device_connection_controller
 import 'package:meshlink/features/devices/providers/device_discovery_controller.dart';
 import 'package:meshlink/features/messages/data/database/app_database.dart';
 import 'package:meshlink/features/messages/data/repositories/message_repository.dart';
+import 'package:meshlink/features/messages/data/services/directional_session_encryption_service.dart';
 import 'package:meshlink/features/messages/data/services/ephemeral_session_service.dart';
 import 'package:meshlink/features/messages/data/services/handshake_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_identity_service.dart';
@@ -29,6 +30,11 @@ final meshIdentityServiceProvider = Provider<MeshIdentityService>((ref) {
 
 final ephemeralSessionServiceProvider = Provider<EphemeralSessionService>((ref) {
   return EphemeralSessionService();
+});
+
+final directionalSessionEncryptionServiceProvider =
+    Provider<DirectionalSessionEncryptionService>((ref) {
+  return DirectionalSessionEncryptionService();
 });
 
 final handshakeServiceProvider = Provider<HandshakeService>((ref) {

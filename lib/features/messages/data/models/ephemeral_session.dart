@@ -1,13 +1,15 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:meshlink/features/messages/data/models/directional_session_keys.dart';
+
 /// Represents an established in-memory ephemeral X25519 session between two peers.
 ///
 /// Established during Phase 7 Step 4 after exchanging authenticated ephemeral
 /// public keys and performing X25519 Diffie-Hellman key agreement.
 ///
 /// Holds the temporary 32-byte X25519 shared secret.
-/// Directional encryption keys (via HKDF) are NOT implemented in Step 4 (deferred to Step 5).
+/// Directional encryption keys (via HKDF) are derived in Step 5 and attached in-memory.
 ///
 /// In-memory only: session secrets must NEVER be written to persistent storage.
 class EphemeralSession {
@@ -53,14 +55,24 @@ class EphemeralSession {
   final Uint8List peerEphemeralPublicKey;
 
   /// 32-byte X25519 Diffie-Hellman shared secret.
-  ///
-  /// NOT an encryption key yet (Step 5 will derive directional keys via HKDF).
   final Uint8List sharedSecret;
 
   /// Timestamp in milliseconds when the session was created.
   final int createdAt;
 
   bool _isDestroyed = false;
+  DirectionalSessionKeys? _directionalKeys;
+
+  /// In-memory directional session keys derived via HKDF-SHA256 for this session.
+  DirectionalSessionKeys? get directionalKeys => _directionalKeys;
+
+  /// Attaches derived directional keys to this session in memory.
+  void setDirectionalKeys(DirectionalSessionKeys keys) {
+    if (_isDestroyed) {
+      throw const EphemeralSessionException('Cannot attach directional keys to a destroyed session');
+    }
+    _directionalKeys = keys;
+  }
 
   /// Returns true if this session has been torn down.
   bool get isDestroyed => _isDestroyed;
@@ -68,6 +80,8 @@ class EphemeralSession {
   /// Marks this session as destroyed and releases references.
   void destroy() {
     _isDestroyed = true;
+    _directionalKeys?.destroy();
+    _directionalKeys = null;
   }
 
   /// Verifies that this session matches the given binding parameters.
@@ -106,7 +120,7 @@ class EphemeralSession {
     required List<int> localEphemeralPublicKey,
     required List<int> peerEphemeralPublicKey,
   }) {
-    final cmp = _compareBytes(localEphemeralPublicKey, peerEphemeralPublicKey);
+    final cmp = compareBytes(localEphemeralPublicKey, peerEphemeralPublicKey);
     final first = cmp <= 0 ? localEphemeralPublicKey : peerEphemeralPublicKey;
     final second = cmp <= 0 ? peerEphemeralPublicKey : localEphemeralPublicKey;
 
@@ -115,7 +129,8 @@ class EphemeralSession {
     return 'SESSION-$requestId-$firstTag-$secondTag';
   }
 
-  static int _compareBytes(List<int> a, List<int> b) {
+  /// Lexicographically compares two byte lists.
+  static int compareBytes(List<int> a, List<int> b) {
     final len = a.length < b.length ? a.length : b.length;
     for (var i = 0; i < len; i++) {
       if (a[i] != b[i]) return a[i] - b[i];
