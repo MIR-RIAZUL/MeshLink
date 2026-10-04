@@ -126,19 +126,19 @@ class HandshakeTranscriptEncoder {
   }
 
   static void _validateVersion(int version) {
-    if (version < 0 || version > 65535) {
-      throw const HandshakeException(
+    if (version != currentProtocolVersion) {
+      throw HandshakeException(
         HandshakeErrorCode.invalidProtocolVersion,
-        'Protocol version must fit in uint16',
+        'Expected protocol version $currentProtocolVersion, got $version',
       );
     }
   }
 
   static void _validateTimestamp(int timestamp) {
-    if (timestamp < 0) {
+    if (timestamp <= 0) {
       throw const HandshakeException(
-        HandshakeErrorCode.invalidRequest,
-        'Timestamp cannot be negative',
+        HandshakeErrorCode.invalidTimestamp,
+        'Timestamp must be a positive integer',
       );
     }
   }
@@ -160,6 +160,7 @@ class HandshakeTranscriptEncoder {
         '$fieldName length must be between 1 and 255 bytes (got ${bytes.length})',
       );
     }
+    HandshakePacketValidator.validateIdentifier(value, fieldName);
     final result = Uint8List(1 + bytes.length);
     result[0] = bytes.length;
     result.setRange(1, 1 + bytes.length, bytes);
@@ -342,14 +343,25 @@ class HandshakeService {
 
   /// Verifies an incoming `key_request` packet from an initiator peer.
   Future<HandshakeVerificationResult> verifyKeyRequest(
-    KeyRequestPacket request,
-  ) async {
+    KeyRequestPacket request, {
+    DateTime? now,
+    bool enforceTimestampHorizon = false,
+  }) async {
     if (request.protocolVersion != 2) {
       throw HandshakeException(
         HandshakeErrorCode.invalidProtocolVersion,
         'Expected protocol version 2, got ${request.protocolVersion}',
       );
     }
+
+    HandshakePacketValidator.validateIdentifier(request.requestId, 'requestId');
+    HandshakePacketValidator.validateIdentifier(request.originId, 'originId');
+    HandshakePacketValidator.validateIdentifier(request.destinationId, 'destinationId');
+    HandshakePacketValidator.validateTimestamp(
+      request.timestamp,
+      nowMs: now?.millisecondsSinceEpoch,
+      enforceHorizon: enforceTimestampHorizon,
+    );
 
     final Uint8List idPubKeyBytes;
     final Uint8List ephPubKeyBytes;
@@ -434,6 +446,8 @@ class HandshakeService {
     required KeyRequestPacket request,
     List<int>? ephemeralPublicKey,
     int? timestamp,
+    DateTime? now,
+    bool enforceTimestampHorizon = false,
   }) async {
     final active = _sessionService?.getSession(request.originId);
     if (active != null && !active.isDestroyed) {
@@ -446,7 +460,11 @@ class HandshakeService {
 
     try {
       // 1. Verify the request first
-      await verifyKeyRequest(request);
+      await verifyKeyRequest(
+        request,
+        now: now,
+        enforceTimestampHorizon: enforceTimestampHorizon,
+      );
 
       final ts = timestamp ?? DateTime.now().millisecondsSinceEpoch;
       final responderIdBytes = await _identityService.getIdentityPublicKeyBytes();
@@ -512,6 +530,8 @@ class HandshakeService {
     HandshakePendingRequest? expectedRequest,
     List<int>? overrideExpectedInitiatorIdentityKey,
     List<int>? overrideExpectedInitiatorEphemeralKey,
+    DateTime? now,
+    bool enforceTimestampHorizon = false,
   }) async {
     if (response.protocolVersion != 2) {
       throw HandshakeException(
@@ -519,6 +539,15 @@ class HandshakeService {
         'Expected protocol version 2, got ${response.protocolVersion}',
       );
     }
+
+    HandshakePacketValidator.validateIdentifier(response.requestId, 'requestId');
+    HandshakePacketValidator.validateIdentifier(response.originId, 'originId');
+    HandshakePacketValidator.validateIdentifier(response.destinationId, 'destinationId');
+    HandshakePacketValidator.validateTimestamp(
+      response.timestamp,
+      nowMs: now?.millisecondsSinceEpoch,
+      enforceHorizon: enforceTimestampHorizon,
+    );
 
     final pending =
         expectedRequest ?? _pendingRequests[response.requestId];
@@ -538,6 +567,19 @@ class HandshakeService {
         HandshakeErrorCode.requestIdMismatch,
         'Response requestId ${response.requestId} does not match pending ${pending.requestId}',
       );
+    }
+
+    if (now != null || enforceTimestampHorizon) {
+      final currentMs = now?.millisecondsSinceEpoch ?? DateTime.now().millisecondsSinceEpoch;
+      if (currentMs - pending.timestamp > 10 * 60 * 1000) {
+        _pendingRequests.remove(response.requestId);
+        _sessionService?.clearPendingKeyPair(response.requestId);
+        _sessionService?.abortRekey(pending.peerId);
+        throw HandshakeException(
+          HandshakeErrorCode.requestExpired,
+          'Pending request ${response.requestId} has expired',
+        );
+      }
     }
 
     try {

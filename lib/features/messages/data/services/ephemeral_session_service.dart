@@ -289,16 +289,25 @@ class EphemeralSessionService implements EphemeralKeyProvider {
       epoch: nextEpoch,
     );
 
-    if (existing != null &&
-        !existing.isDestroyed &&
-        existing.sessionId == sessionId &&
-        (!EphemeralSession.constantTimeCompare(
-                existing.peerEphemeralPublicKey, peerEphemeralPublicKey) ||
-            !EphemeralSession.constantTimeCompare(
-                existing.localEphemeralPublicKey, kp.publicKey.bytes))) {
-      throw const EphemeralSessionException(
-        'Session binding violation: ephemeral public keys do not match existing session',
-      );
+    if (existing != null && !existing.isDestroyed) {
+      if (EphemeralSession.constantTimeCompare(
+              existing.localEphemeralPublicKey, kp.publicKey.bytes) ||
+          EphemeralSession.constantTimeCompare(
+              existing.peerEphemeralPublicKey, peerEphemeralPublicKey)) {
+        throw const EphemeralSessionException(
+          'Ephemeral key reuse detected: rekey must use fresh ephemeral key pairs',
+        );
+      }
+
+      if (existing.sessionId == sessionId &&
+          (!EphemeralSession.constantTimeCompare(
+                  existing.peerEphemeralPublicKey, peerEphemeralPublicKey) ||
+              !EphemeralSession.constantTimeCompare(
+                  existing.localEphemeralPublicKey, kp.publicKey.bytes))) {
+        throw const EphemeralSessionException(
+          'Session binding violation: ephemeral public keys do not match existing session',
+        );
+      }
     }
 
     final currentNow = now ?? _now;

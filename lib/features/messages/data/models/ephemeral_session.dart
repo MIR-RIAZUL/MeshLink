@@ -44,7 +44,25 @@ class EphemeralSession {
     this.receivedMessageCount = 0,
     this.rekeyedAt,
     SessionLifecycleState? state,
-  }) : _state = state ?? SessionLifecycleState.activeSession;
+  }) : _state = state ?? SessionLifecycleState.activeSession {
+    if (epoch < 0) {
+      throw const EphemeralSessionException('Epoch cannot be negative');
+    }
+    if (sentMessageCount < 0 || receivedMessageCount < 0) {
+      throw const EphemeralSessionException('Message counters cannot be negative');
+    }
+    if (sharedSecret.length != 32) {
+      throw EphemeralSessionException(
+        'Shared secret must be 32 bytes (got ${sharedSecret.length})',
+      );
+    }
+    if (localIdentityPublicKey.length != 32 || peerIdentityPublicKey.length != 32) {
+      throw const EphemeralSessionException('Identity public keys must be 32 bytes');
+    }
+    if (localEphemeralPublicKey.length != 32 || peerEphemeralPublicKey.length != 32) {
+      throw const EphemeralSessionException('Ephemeral public keys must be 32 bytes');
+    }
+  }
 
   /// Deterministic unique session identifier bound to requestId, epoch, and ephemeral keys.
   final String sessionId;
@@ -102,6 +120,9 @@ class EphemeralSession {
     _state = newState;
   }
 
+  /// Alias for [setState].
+  void setLifecycleState(SessionLifecycleState newState) => setState(newState);
+
   /// Total messages processed (sent + received) under this session.
   int get totalMessageCount => sentMessageCount + receivedMessageCount;
 
@@ -117,13 +138,22 @@ class EphemeralSession {
   /// Grace period during which a superseded previous session remains valid for in-flight packets (10 minutes).
   static const Duration gracePeriodDuration = Duration(minutes: 10);
 
+  /// Maximum safe 32-bit unsigned sequence number before forced rekey or exhaustion.
+  static const int maxSequenceNumber = 0xFFFFFFFF;
+
   /// Increments the sent message count.
   void recordSentMessage() {
+    if (sentMessageCount >= maxSequenceNumber) {
+      throw const EphemeralSessionException('Sequence number overflow');
+    }
     sentMessageCount++;
   }
 
   /// Increments the received message count.
   void recordReceivedMessage() {
+    if (receivedMessageCount >= maxSequenceNumber) {
+      throw const EphemeralSessionException('Sequence number overflow');
+    }
     receivedMessageCount++;
   }
 

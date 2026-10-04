@@ -16,6 +16,9 @@ enum HandshakeErrorCode {
   sessionDerivationFailed,
   concurrentHandshake,
   invalidState,
+  invalidTimestamp,
+  invalidIdentifier,
+  requestExpired,
 }
 
 /// Structured exception thrown on handshake verification, validation, or protocol failures.
@@ -29,6 +32,82 @@ class HandshakeException implements Exception {
 
   @override
   String toString() => 'HandshakeException(${code.name}): $message';
+}
+
+/// Validates string identifiers and timestamps for security packets.
+class HandshakePacketValidator {
+  static const int maxIdentifierLength = 128;
+
+  /// Validates that [id] is non-empty, does not exceed 128 characters,
+  /// contains no leading/trailing whitespace, and contains no control characters.
+  static void validateIdentifier(String? id, String fieldName) {
+    if (id == null || id.isEmpty) {
+      throw HandshakeException(
+        HandshakeErrorCode.invalidIdentifier,
+        '$fieldName cannot be null or empty',
+      );
+    }
+    if (id.length > maxIdentifierLength) {
+      throw HandshakeException(
+        HandshakeErrorCode.invalidIdentifier,
+        '$fieldName exceeds max length of $maxIdentifierLength characters',
+      );
+    }
+    if (id.trim() != id) {
+      throw HandshakeException(
+        HandshakeErrorCode.invalidIdentifier,
+        '$fieldName must not contain leading or trailing whitespace',
+      );
+    }
+    for (int i = 0; i < id.length; i++) {
+      final code = id.codeUnitAt(i);
+      if (code < 0x20 || code == 0x7F) {
+        throw HandshakeException(
+          HandshakeErrorCode.invalidIdentifier,
+          '$fieldName must not contain control characters',
+        );
+      }
+    }
+  }
+
+  /// Historical replay horizon: 7 days.
+  static const int maxPastHorizonMs = 7 * 24 * 60 * 60 * 1000;
+
+  /// Future timestamp tolerance: +1 hour.
+  static const int maxFutureToleranceMs = 60 * 60 * 1000;
+
+  /// Validates that [timestamp] is a positive integer and, if [nowMs] or [enforceHorizon]
+  /// is specified, falls within the -7 days and +1 hour horizon.
+  static void validateTimestamp(
+    int? timestamp, {
+    int? nowMs,
+    bool enforceHorizon = false,
+  }) {
+    if (timestamp == null || timestamp <= 0) {
+      throw const HandshakeException(
+        HandshakeErrorCode.invalidTimestamp,
+        'Timestamp must be a positive integer',
+      );
+    }
+    if (nowMs != null || enforceHorizon) {
+      final current = nowMs ?? DateTime.now().millisecondsSinceEpoch;
+      final maxFuture = current + maxFutureToleranceMs;
+      final minPast = current - maxPastHorizonMs;
+
+      if (timestamp > maxFuture) {
+        throw HandshakeException(
+          HandshakeErrorCode.invalidTimestamp,
+          'Timestamp is too far in the future ($timestamp > $maxFuture)',
+        );
+      }
+      if (timestamp < minPast) {
+        throw HandshakeException(
+          HandshakeErrorCode.invalidTimestamp,
+          'Timestamp is too old / beyond replay horizon ($timestamp < $minPast)',
+        );
+      }
+    }
+  }
 }
 
 /// Represents the v2 authenticated `key_request` packet sent from initiator to responder.
@@ -119,6 +198,11 @@ class KeyRequestPacket {
         'Missing required fields in key_request packet',
       );
     }
+
+    HandshakePacketValidator.validateIdentifier(requestId, 'requestId');
+    HandshakePacketValidator.validateIdentifier(originId, 'originId');
+    HandshakePacketValidator.validateIdentifier(destinationId, 'destinationId');
+    HandshakePacketValidator.validateTimestamp(timestamp);
 
     return KeyRequestPacket(
       protocolVersion: version,
@@ -241,6 +325,11 @@ class KeyResponsePacket {
         'Missing required fields in key_response packet',
       );
     }
+
+    HandshakePacketValidator.validateIdentifier(requestId, 'requestId');
+    HandshakePacketValidator.validateIdentifier(originId, 'originId');
+    HandshakePacketValidator.validateIdentifier(destinationId, 'destinationId');
+    HandshakePacketValidator.validateTimestamp(timestamp);
 
     return KeyResponsePacket(
       protocolVersion: version,

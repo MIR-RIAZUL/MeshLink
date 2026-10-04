@@ -206,6 +206,12 @@ class DirectionalSessionEncryptionService {
         'Cannot encrypt: session is destroyed',
       );
     }
+    if (session.state == SessionLifecycleState.noSession ||
+        session.state == SessionLifecycleState.handshakeInit) {
+      throw DirectionalEncryptionException(
+        'Cannot encrypt: session is in invalid lifecycle state (${session.state})',
+      );
+    }
 
     final keys = await getOrDeriveKeys(session);
     if (keys.isDestroyed) {
@@ -253,6 +259,12 @@ class DirectionalSessionEncryptionService {
     if (session.isDestroyed) {
       throw const DirectionalEncryptionException(
         'Cannot decrypt: session is destroyed',
+      );
+    }
+    if (session.state == SessionLifecycleState.noSession ||
+        session.state == SessionLifecycleState.handshakeInit) {
+      throw DirectionalEncryptionException(
+        'Cannot decrypt: session is in invalid lifecycle state (${session.state})',
       );
     }
 
@@ -326,10 +338,10 @@ class DirectionalSessionEncryptionService {
   }
 
   /// Builds canonical AAD (Authenticated Additional Data) binding protocol version,
-  /// packet type, session ID, origin, destination, and message ID.
+  /// packet type, session ID, origin, destination, message ID, and optional epoch and sequence number.
   ///
   /// Format:
-  /// `MESHLINK-v2-AAD|<version>|<packetType>|<sessionId>|<originId>|<destinationId>|<messageId>`
+  /// `MESHLINK-v2-AAD|<version>|<packetType>|<sessionId>|<originId>|<destinationId>|<messageId>[|<epoch>|<sequenceNumber>]`
   static Uint8List buildCanonicalAad({
     int version = protocolVersion,
     String packetType = 'encrypted_message',
@@ -337,12 +349,47 @@ class DirectionalSessionEncryptionService {
     required String originId,
     required String destinationId,
     required String messageId,
+    int? epoch,
+    int? sequenceNumber,
   }) {
+    if (version != protocolVersion) {
+      throw DirectionalEncryptionException(
+        'Unsupported protocol version: $version (expected $protocolVersion)',
+      );
+    }
+    _validateAadIdentifier(packetType, 'packetType');
+    _validateAadIdentifier(sessionId, 'sessionId');
+    _validateAadIdentifier(originId, 'originId');
+    _validateAadIdentifier(destinationId, 'destinationId');
+    _validateAadIdentifier(messageId, 'messageId');
+
+    final suffix = (epoch != null || sequenceNumber != null)
+        ? '|${epoch ?? 0}|${sequenceNumber ?? 0}'
+        : '';
     return Uint8List.fromList(
       utf8.encode(
-        'MESHLINK-v2-AAD|$version|$packetType|$sessionId|$originId|$destinationId|$messageId',
+        'MESHLINK-v2-AAD|$version|$packetType|$sessionId|$originId|$destinationId|$messageId$suffix',
       ),
     );
+  }
+
+  static void _validateAadIdentifier(String id, String fieldName) {
+    if (id.isEmpty) {
+      throw DirectionalEncryptionException('$fieldName cannot be empty');
+    }
+    if (id.length > 128) {
+      throw DirectionalEncryptionException(
+        '$fieldName exceeds maximum length of 128 characters',
+      );
+    }
+    for (int i = 0; i < id.length; i++) {
+      final code = id.codeUnitAt(i);
+      if (code < 0x20 || code == 0x7F) {
+        throw DirectionalEncryptionException(
+          '$fieldName contains invalid control characters',
+        );
+      }
+    }
   }
 }
 
