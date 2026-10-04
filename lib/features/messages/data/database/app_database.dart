@@ -212,6 +212,7 @@ class AppDatabase extends _$AppDatabase {
     required String packetType,
     required String originId,
     required String packetId,
+    DateTime? receivedAt,
   }) async {
     final key = '$packetType:$originId:$packetId';
     final rowsAffected = await customUpdate(
@@ -220,11 +221,18 @@ class AppDatabase extends _$AppDatabase {
         Variable.withString(key),
         Variable.withString(packetType),
         Variable.withString(originId),
-        Variable.withDateTime(DateTime.now()),
+        Variable.withDateTime(receivedAt ?? DateTime.now()),
       ],
       updates: {seenPacketsTable},
     );
     return rowsAffected > 0;
+  }
+
+  /// Checks whether a packet has already been recorded in seen_packets_table without inserting.
+  Future<bool> hasSeenPacket(String replayKey) async {
+    final query = select(seenPacketsTable)..where((t) => t.replayKey.equals(replayKey));
+    final entry = await query.getSingleOrNull();
+    return entry != null;
   }
 
   /// Deletes seen packet entries older than maxAge.

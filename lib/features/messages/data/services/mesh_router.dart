@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:meshlink/features/devices/data/services/device_discovery_service.dart';
 import 'package:meshlink/features/messages/data/models/mesh_message.dart';
+import 'package:meshlink/features/messages/data/services/replay_protection_service.dart';
 
 sealed class RoutedPayloadResult {
   const RoutedPayloadResult();
@@ -75,10 +76,12 @@ class MeshRouter {
     required DeviceDiscoveryService discoveryService,
     required String localId,
     Set<String> Function()? getConnectedPeers,
+    ReplayProtectionService? replayProtectionService,
   })  : _service = discoveryService,
         _currentLocalId = localId,
         // ignore: prefer_initializing_formals
         _getConnectedPeers = getConnectedPeers,
+        _replayProtection = replayProtectionService,
         _subscription = null {
     _subscription = _service.events.listen(_onDiscoveryEvent);
   }
@@ -86,6 +89,7 @@ class MeshRouter {
   final DeviceDiscoveryService _service;
   String _currentLocalId;
   final Set<String> Function()? _getConnectedPeers;
+  final ReplayProtectionService? _replayProtection;
   final Set<String> _connectedPeers = {};
   final Set<String> _processedMessageIds = {};
   final Set<String> _processedAckIds = {};
@@ -194,10 +198,42 @@ class MeshRouter {
         data['version'] != 1 || data['nonce'] is! String || data['ciphertext'] is! String || data['mac'] is! String) {
       return const DroppedPayload('Invalid encrypted packet');
     }
-    if (_processedMessageIds.contains(messageId)) {
-      return const DroppedPayload('Duplicate message');
+
+    final timestampStr = data['timestamp'] as String?;
+    final timestamp = timestampStr != null
+        ? (DateTime.tryParse(timestampStr) ?? DateTime.now())
+        : DateTime.now();
+
+    if (_replayProtection != null) {
+      if (destinationId != _currentLocalId) {
+        // Relaying node: check and mark as seen so duplicate is not forwarded
+        final outcome = await _replayProtection.checkAndMarkSeen(
+          packetType: 'encrypted_message',
+          originId: originId,
+          packetId: messageId,
+          timestamp: timestamp,
+        );
+        if (!outcome.isAccepted) {
+          return const DroppedPayload('Duplicate or invalid replay packet');
+        }
+      } else {
+        // Local destination: pre-check if already recorded
+        final isDuplicate = await _replayProtection.isSeen(
+          packetType: 'encrypted_message',
+          originId: originId,
+          packetId: messageId,
+        );
+        if (isDuplicate) {
+          return const DroppedPayload('Duplicate message');
+        }
+      }
+    } else {
+      if (_processedMessageIds.contains(messageId)) {
+        return const DroppedPayload('Duplicate message');
+      }
+      _addToProcessed(messageId, _processedMessageIds);
     }
-    _addToProcessed(messageId, _processedMessageIds);
+
     if (destinationId == _currentLocalId) {
       await _sendAck(
         messageId: messageId,
@@ -400,10 +436,27 @@ class MeshRouter {
     final hopCount = (data['hopCount'] as int?) ?? 0;
 
     final ackKey = '${messageId}_$originId';
-    if (_processedAckIds.contains(ackKey)) {
-      return const DroppedPayload('Duplicate ACK');
+    if (_replayProtection != null) {
+      final timestampStr = data['timestamp'] as String?;
+      final timestamp = timestampStr != null
+          ? (DateTime.tryParse(timestampStr) ?? DateTime.now())
+          : DateTime.now();
+
+      final outcome = await _replayProtection.checkAndMarkSeen(
+        packetType: 'ack',
+        originId: originId,
+        packetId: messageId,
+        timestamp: timestamp,
+      );
+      if (!outcome.isAccepted) {
+        return const DroppedPayload('Duplicate or invalid ACK');
+      }
+    } else {
+      if (_processedAckIds.contains(ackKey)) {
+        return const DroppedPayload('Duplicate ACK');
+      }
+      _addToProcessed(ackKey, _processedAckIds);
     }
-    _addToProcessed(ackKey, _processedAckIds);
 
     // Is this ACK destined for this node?
     if (destinationId == _currentLocalId) {

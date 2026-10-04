@@ -7,6 +7,7 @@ import 'package:meshlink/features/messages/data/models/mesh_message.dart';
 import 'package:meshlink/features/messages/data/services/message_storage_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_router.dart';
 import 'package:meshlink/features/messages/data/services/mesh_crypto_service.dart';
+import 'package:meshlink/features/messages/data/services/replay_protection_service.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
@@ -44,14 +45,17 @@ class BleMeshMessagingService implements MeshMessagingService {
     required String localId,
     MeshRouter? router,
     MeshCryptoService? cryptoService,
+    ReplayProtectionService? replayProtectionService,
   })  : _service = discoveryService,
         _storage = storageService,
         _currentLocalId = localId,
         _crypto = cryptoService ?? MeshCryptoService(),
+        _replayProtection = replayProtectionService,
         _router = router ??
             MeshRouter(
               discoveryService: discoveryService,
               localId: localId,
+              replayProtectionService: replayProtectionService,
             ) {
     _subscription = _service.events.listen(_handleDiscoveryEvent);
   }
@@ -60,6 +64,7 @@ class BleMeshMessagingService implements MeshMessagingService {
   final MessageStorageService _storage;
   final MeshRouter _router;
   final MeshCryptoService _crypto;
+  final ReplayProtectionService? _replayProtection;
   String _currentLocalId;
   bool _isFlushing = false;
   final Map<String, Map<String, dynamic>> _incomingTransfers = {};
@@ -496,15 +501,32 @@ class BleMeshMessagingService implements MeshMessagingService {
         mac: payload['mac'] as String,
       );
       if (text.length > MeshMessage.maxMessageLength) return;
+
+      final messageId = payload['messageId'] as String;
+      final originId = payload['originId'] as String;
+      final timestamp = DateTime.tryParse(payload['timestamp'] as String? ?? '') ?? DateTime.now();
+
+      if (_replayProtection != null) {
+        final outcome = await _replayProtection.checkAndMarkSeen(
+          packetType: 'encrypted_message',
+          originId: originId,
+          packetId: messageId,
+          timestamp: timestamp,
+        );
+        if (!outcome.isAccepted) {
+          return;
+        }
+      }
+
       final message = MeshMessage(
-        id: payload['messageId'] as String,
+        id: messageId,
         conversationId: payload['originId'] as String,
-        senderId: payload['senderId'] as String? ?? payload['originId'] as String,
+        senderId: payload['senderId'] as String? ?? originId,
         receiverId: payload['receiverId'] as String? ?? _currentLocalId,
-        originId: payload['originId'] as String,
+        originId: originId,
         destinationId: payload['destinationId'] as String,
         text: text,
-        timestamp: DateTime.tryParse(payload['timestamp'] as String? ?? '') ?? DateTime.now(),
+        timestamp: timestamp,
         status: MessageStatus.delivered,
         ttl: payload['ttl'] as int? ?? MeshMessage.defaultTtl,
         hopCount: payload['hopCount'] as int? ?? 0,

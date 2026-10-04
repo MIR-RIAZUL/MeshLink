@@ -13,6 +13,8 @@ import 'package:meshlink/features/messages/data/services/mesh_messaging_service.
 import 'package:meshlink/features/messages/data/services/mesh_router.dart';
 import 'package:meshlink/features/messages/providers/messaging_controller.dart';
 
+import 'package:meshlink/features/messages/data/services/replay_protection_service.dart';
+
 final appDatabaseProvider = Provider<AppDatabase>((ref) {
   final db = AppDatabase();
   ref.onDispose(() => db.close());
@@ -22,6 +24,13 @@ final appDatabaseProvider = Provider<AppDatabase>((ref) {
 final messageRepositoryProvider = Provider<MessageRepository>((ref) {
   final db = ref.watch(appDatabaseProvider);
   return DriftMessageRepository(db);
+});
+
+final replayProtectionServiceProvider = Provider<ReplayProtectionService>((ref) {
+  final repository = ref.watch(messageRepositoryProvider);
+  final service = ReplayProtectionService(repository: repository);
+  service.pruneOnStartup();
+  return service;
 });
 
 final meshIdentityServiceProvider = Provider<MeshIdentityService>((ref) {
@@ -85,11 +94,13 @@ final meshMessagingServiceProvider = Provider<MeshMessagingService>((ref) {
   final connectionController = ref.watch(
     deviceConnectionControllerProvider.notifier,
   );
+  final replayProtectionService = ref.watch(replayProtectionServiceProvider);
 
   final router = MeshRouter(
     discoveryService: discoveryService,
     localId: discoveryController.localIdentity.id,
     getConnectedPeers: () => connectionController.connectedDevices,
+    replayProtectionService: replayProtectionService,
   );
 
   final service = BleMeshMessagingService(
@@ -97,6 +108,7 @@ final meshMessagingServiceProvider = Provider<MeshMessagingService>((ref) {
     storageService: repository,
     localId: discoveryController.localIdentity.id,
     router: router,
+    replayProtectionService: replayProtectionService,
   );
   ref.onDispose(() => service.dispose());
   return service;

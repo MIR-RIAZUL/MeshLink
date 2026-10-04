@@ -29,7 +29,10 @@ abstract class MessageRepository implements MessageStorageService {
     required String packetType,
     required String originId,
     required String packetId,
+    DateTime? receivedAt,
   });
+
+  Future<bool> hasSeenPacket(String replayKey);
 
   Future<int> pruneExpiredPackets(Duration maxAge);
 
@@ -113,12 +116,19 @@ class DriftMessageRepository implements MessageRepository {
     required String packetType,
     required String originId,
     required String packetId,
+    DateTime? receivedAt,
   }) {
     return _db.checkAndMarkSeen(
       packetType: packetType,
       originId: originId,
       packetId: packetId,
+      receivedAt: receivedAt,
     );
+  }
+
+  @override
+  Future<bool> hasSeenPacket(String replayKey) {
+    return _db.hasSeenPacket(replayKey);
   }
 
   @override
