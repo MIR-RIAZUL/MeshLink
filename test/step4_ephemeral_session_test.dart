@@ -1,790 +1,802 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:meshlink/features/messages/data/database/app_database.dart';
 import 'package:meshlink/features/messages/data/models/ephemeral_session.dart';
 import 'package:meshlink/features/messages/data/models/handshake_packets.dart';
+import 'package:meshlink/features/messages/data/repositories/message_repository.dart';
 import 'package:meshlink/features/messages/data/services/ephemeral_session_service.dart';
 import 'package:meshlink/features/messages/data/services/handshake_service.dart';
+import 'package:meshlink/features/messages/data/services/mesh_crypto_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_identity_service.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  group('Step 4: Ephemeral X25519 Session Establishment', () {
-    // ── EphemeralSessionService Unit Tests ──
+  group('Phase 7 Step 4: Ephemeral Session Establishment', () {
+    late MeshIdentityService aliceIdentity;
+    late MeshIdentityService bobIdentity;
+    late MeshIdentityService charlieIdentity;
+    late EphemeralSessionService aliceSessionService;
+    late EphemeralSessionService bobSessionService;
+    late EphemeralSessionService charlieSessionService;
+    late HandshakeService aliceHandshake;
+    late HandshakeService bobHandshake;
+    late HandshakeService charlieHandshake;
 
-    group('EphemeralSessionService — Key Pair Generation', () {
-      late EphemeralSessionService service;
+    setUp(() async {
+      aliceIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
+      bobIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
+      charlieIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
 
-      setUp(() {
-        service = EphemeralSessionService();
-      });
+      await aliceIdentity.initialize();
+      await bobIdentity.initialize();
+      await charlieIdentity.initialize();
 
-      test('Test 1 — generateEphemeralKeyPair produces valid 32-byte X25519 key pair', () async {
-        final keyPair = await service.generateEphemeralKeyPair();
+      aliceSessionService = EphemeralSessionService();
+      bobSessionService = EphemeralSessionService();
+      charlieSessionService = EphemeralSessionService();
 
-        expect(keyPair.bytes.length, 32, reason: 'Private key seed must be 32 bytes');
-        expect(keyPair.publicKey.bytes.length, 32, reason: 'Public key must be 32 bytes');
-        expect(keyPair.type, KeyPairType.x25519);
-      });
+      aliceHandshake = HandshakeService(
+        identityService: aliceIdentity,
+        localId: 'ML-DEVICE-A',
+        sessionService: aliceSessionService,
+      );
 
-      test('Test 2 — getEphemeralPublicKey returns current key pair public key', () async {
-        final keyPair = await service.generateEphemeralKeyPair();
-        final pubKey = await service.getEphemeralPublicKey();
+      bobHandshake = HandshakeService(
+        identityService: bobIdentity,
+        localId: 'ML-DEVICE-B',
+        sessionService: bobSessionService,
+      );
 
-        expect(pubKey, Uint8List.fromList(keyPair.publicKey.bytes));
-        expect(pubKey.length, 32);
-      });
-
-      test('Test 3 — getEphemeralPublicKey auto-generates if no key pair exists', () async {
-        // No explicit generateEphemeralKeyPair call
-        final pubKey = await service.getEphemeralPublicKey();
-
-        expect(pubKey.length, 32);
-        expect(pubKey, isNot(Uint8List(32)), reason: 'Should not be all zeros');
-      });
-
-      test('Test 4 — Successive generateEphemeralKeyPair calls produce distinct key pairs', () async {
-        final kp1 = await service.generateEphemeralKeyPair();
-        final kp2 = await service.generateEphemeralKeyPair();
-
-        expect(
-          kp1.publicKey.bytes,
-          isNot(equals(kp2.publicKey.bytes)),
-          reason: 'Each call must generate a fresh random key pair',
-        );
-      });
+      charlieHandshake = HandshakeService(
+        identityService: charlieIdentity,
+        localId: 'ML-DEVICE-C',
+        sessionService: charlieSessionService,
+      );
     });
 
-    group('EphemeralSessionService — Session Derivation', () {
-      late EphemeralSessionService aliceSession;
-      late EphemeralSessionService bobSession;
-      late MeshIdentityService aliceIdentity;
-      late MeshIdentityService bobIdentity;
+    // ── Test 1 — Real X25519 key generation ──
+    test('Test 1 — Real X25519 key generation produces valid 32-byte key pairs', () async {
+      final keyPair = await aliceSessionService.generateEphemeralKeyPair(requestId: 'REQ-TEST-1');
 
-      setUp(() async {
-        aliceSession = EphemeralSessionService();
-        bobSession = EphemeralSessionService();
-        aliceIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
-        bobIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
-        await aliceIdentity.initialize();
-        await bobIdentity.initialize();
-      });
+      expect(keyPair.type, KeyPairType.x25519);
+      expect(keyPair.publicKey.bytes.length, 32, reason: 'Public key must be 32 bytes');
+      expect(keyPair.bytes.length, 32, reason: 'Private key seed must be 32 bytes');
+      expect(keyPair.publicKey.bytes, isNot(equals(Uint8List(32))), reason: 'Public key cannot be all zeros');
+      expect(keyPair.bytes, isNot(equals(Uint8List(32))), reason: 'Private key cannot be all zeros');
 
-      test('Test 5 — Symmetric session derivation: both sides derive identical keys', () async {
-        // Alice generates her ephemeral key pair
-        final aliceEphKp = await aliceSession.generateEphemeralKeyPair();
-        final aliceEphPub = Uint8List.fromList(aliceEphKp.publicKey.bytes);
-
-        // Bob generates his ephemeral key pair
-        final bobEphKp = await bobSession.generateEphemeralKeyPair();
-        final bobEphPub = Uint8List.fromList(bobEphKp.publicKey.bytes);
-
-        final aliceIdPub = await aliceIdentity.getIdentityPublicKeyBytes();
-        final bobIdPub = await bobIdentity.getIdentityPublicKeyBytes();
-
-        // Alice derives session as initiator
-        final aliceResult = await aliceSession.deriveSessionKeys(
-          requestId: 'REQ-SYM-001',
-          localId: 'ML-ALICE',
-          peerId: 'ML-BOB',
-          isInitiator: true,
-          peerEphemeralPublicKey: bobEphPub,
-          localIdentityPublicKey: aliceIdPub,
-          peerIdentityPublicKey: bobIdPub,
-        );
-
-        // Bob derives session as responder
-        final bobResult = await bobSession.deriveSessionKeys(
-          requestId: 'REQ-SYM-001',
-          localId: 'ML-BOB',
-          peerId: 'ML-ALICE',
-          isInitiator: false,
-          peerEphemeralPublicKey: aliceEphPub,
-          localIdentityPublicKey: bobIdPub,
-          peerIdentityPublicKey: aliceIdPub,
-        );
-
-        // Both must derive the same directional keys
-        expect(aliceResult.initiatorToResponderKey, bobResult.initiatorToResponderKey,
-            reason: 'initiator→responder key must match');
-        expect(aliceResult.responderToInitiatorKey, bobResult.responderToInitiatorKey,
-            reason: 'responder→initiator key must match');
-
-        // Directional keys must be different from each other
-        expect(aliceResult.initiatorToResponderKey,
-            isNot(equals(aliceResult.responderToInitiatorKey)),
-            reason: 'Directional keys must differ');
-      });
-
-      test('Test 6 — Convenience getters: localEncryptionKey and localDecryptionKey', () async {
-        final aliceEphKp = await aliceSession.generateEphemeralKeyPair();
-        final bobEphKp = await bobSession.generateEphemeralKeyPair();
-
-        final aliceIdPub = await aliceIdentity.getIdentityPublicKeyBytes();
-        final bobIdPub = await bobIdentity.getIdentityPublicKeyBytes();
-
-        final aliceResult = await aliceSession.deriveSessionKeys(
-          requestId: 'REQ-CONV-001',
-          localId: 'ML-ALICE',
-          peerId: 'ML-BOB',
-          isInitiator: true,
-          peerEphemeralPublicKey: Uint8List.fromList(bobEphKp.publicKey.bytes),
-          localIdentityPublicKey: aliceIdPub,
-          peerIdentityPublicKey: bobIdPub,
-        );
-
-        final bobResult = await bobSession.deriveSessionKeys(
-          requestId: 'REQ-CONV-001',
-          localId: 'ML-BOB',
-          peerId: 'ML-ALICE',
-          isInitiator: false,
-          peerEphemeralPublicKey: Uint8List.fromList(aliceEphKp.publicKey.bytes),
-          localIdentityPublicKey: bobIdPub,
-          peerIdentityPublicKey: aliceIdPub,
-        );
-
-        // Alice's encrypt key = Bob's decrypt key
-        expect(aliceResult.localEncryptionKey, bobResult.localDecryptionKey,
-            reason: "Alice's encryption key must be Bob's decryption key");
-        // Bob's encrypt key = Alice's decrypt key
-        expect(bobResult.localEncryptionKey, aliceResult.localDecryptionKey,
-            reason: "Bob's encryption key must be Alice's decryption key");
-      });
-
-      test('Test 7 — Session stored and retrievable by peer ID', () async {
-        final _ = await aliceSession.generateEphemeralKeyPair();
-        final bobEphKp = await bobSession.generateEphemeralKeyPair();
-
-        final aliceIdPub = await aliceIdentity.getIdentityPublicKeyBytes();
-        final bobIdPub = await bobIdentity.getIdentityPublicKeyBytes();
-
-        expect(aliceSession.hasSession('ML-BOB'), isFalse);
-
-        await aliceSession.deriveSessionKeys(
-          requestId: 'REQ-STORE-001',
-          localId: 'ML-ALICE',
-          peerId: 'ML-BOB',
-          isInitiator: true,
-          peerEphemeralPublicKey: Uint8List.fromList(bobEphKp.publicKey.bytes),
-          localIdentityPublicKey: aliceIdPub,
-          peerIdentityPublicKey: bobIdPub,
-        );
-
-        expect(aliceSession.hasSession('ML-BOB'), isTrue);
-        expect(aliceSession.getSession('ML-BOB'), isNotNull);
-        expect(aliceSession.getSession('ML-BOB')!.requestId, 'REQ-STORE-001');
-        expect(aliceSession.getSession('ML-BOB')!.peerId, 'ML-BOB');
-        expect(aliceSession.getSession('ML-BOB')!.isInitiator, isTrue);
-      });
-
-      test('Test 8 — Ephemeral key pair cleared after session derivation', () async {
-        final bobEphKp = await bobSession.generateEphemeralKeyPair();
-        final aliceIdPub = await aliceIdentity.getIdentityPublicKeyBytes();
-        final bobIdPub = await bobIdentity.getIdentityPublicKeyBytes();
-
-        await aliceSession.generateEphemeralKeyPair();
-
-        // Derive session consumes the key pair
-        await aliceSession.deriveSessionKeys(
-          requestId: 'REQ-CLEAR-001',
-          localId: 'ML-ALICE',
-          peerId: 'ML-BOB',
-          isInitiator: true,
-          peerEphemeralPublicKey: Uint8List.fromList(bobEphKp.publicKey.bytes),
-          localIdentityPublicKey: aliceIdPub,
-          peerIdentityPublicKey: bobIdPub,
-        );
-
-        // Attempting to derive again without new key pair should throw
-        expect(
-          () async => aliceSession.deriveSessionKeys(
-            requestId: 'REQ-CLEAR-002',
-            localId: 'ML-ALICE',
-            peerId: 'ML-CHARLIE',
-            isInitiator: true,
-            peerEphemeralPublicKey: Uint8List.fromList(bobEphKp.publicKey.bytes),
-            localIdentityPublicKey: aliceIdPub,
-            peerIdentityPublicKey: bobIdPub,
-          ),
-          throwsA(isA<EphemeralSessionException>().having(
-            (e) => e.message,
-            'message',
-            contains('No ephemeral key pair available'),
-          )),
-        );
-      });
-
-      test('Test 9 — Different requestId produces different session keys', () async {
-        final aliceIdPub = await aliceIdentity.getIdentityPublicKeyBytes();
-        final bobIdPub = await bobIdentity.getIdentityPublicKeyBytes();
-
-        // Session 1
-        final aliceKp1 = await aliceSession.generateEphemeralKeyPair();
-        final bobKp1 = await bobSession.generateEphemeralKeyPair();
-
-        final session1 = await aliceSession.deriveSessionKeys(
-          requestId: 'REQ-DIFF-001',
-          localId: 'ML-ALICE',
-          peerId: 'ML-BOB',
-          isInitiator: true,
-          peerEphemeralPublicKey: Uint8List.fromList(bobKp1.publicKey.bytes),
-          localIdentityPublicKey: aliceIdPub,
-          peerIdentityPublicKey: bobIdPub,
-          localKeyPair: aliceKp1,
-        );
-
-        // Session 2 with same keys but different requestId
-        final session2 = await aliceSession.deriveSessionKeys(
-          requestId: 'REQ-DIFF-002',
-          localId: 'ML-ALICE',
-          peerId: 'ML-BOB',
-          isInitiator: true,
-          peerEphemeralPublicKey: Uint8List.fromList(bobKp1.publicKey.bytes),
-          localIdentityPublicKey: aliceIdPub,
-          peerIdentityPublicKey: bobIdPub,
-          localKeyPair: aliceKp1,
-        );
-
-        expect(session1.initiatorToResponderKey,
-            isNot(equals(session2.initiatorToResponderKey)),
-            reason: 'Different requestId must yield different keys');
-      });
-
-      test('Test 10 — removeSession and clearAll work correctly', () async {
-        final _ = await aliceSession.generateEphemeralKeyPair();
-        final bobEphKp = await bobSession.generateEphemeralKeyPair();
-        final aliceIdPub = await aliceIdentity.getIdentityPublicKeyBytes();
-        final bobIdPub = await bobIdentity.getIdentityPublicKeyBytes();
-
-        await aliceSession.deriveSessionKeys(
-          requestId: 'REQ-RM-001',
-          localId: 'ML-ALICE',
-          peerId: 'ML-BOB',
-          isInitiator: true,
-          peerEphemeralPublicKey: Uint8List.fromList(bobEphKp.publicKey.bytes),
-          localIdentityPublicKey: aliceIdPub,
-          peerIdentityPublicKey: bobIdPub,
-        );
-
-        expect(aliceSession.hasSession('ML-BOB'), isTrue);
-
-        final removed = aliceSession.removeSession('ML-BOB');
-        expect(removed, isNotNull);
-        expect(removed!.peerId, 'ML-BOB');
-        expect(aliceSession.hasSession('ML-BOB'), isFalse);
-
-        // Re-create and clearAll
-        await aliceSession.generateEphemeralKeyPair();
-        await aliceSession.deriveSessionKeys(
-          requestId: 'REQ-RM-002',
-          localId: 'ML-ALICE',
-          peerId: 'ML-BOB',
-          isInitiator: true,
-          peerEphemeralPublicKey: Uint8List.fromList(bobEphKp.publicKey.bytes),
-          localIdentityPublicKey: aliceIdPub,
-          peerIdentityPublicKey: bobIdPub,
-          localKeyPair: await aliceSession.generateEphemeralKeyPair(),
-        );
-
-        aliceSession.clearAll();
-        expect(aliceSession.hasSession('ML-BOB'), isFalse);
-      });
+      // EphemeralKeyProvider interface returns matching bytes
+      final pubBytes = await aliceSessionService.getEphemeralPublicKey(requestId: 'REQ-TEST-1');
+      expect(pubBytes, Uint8List.fromList(keyPair.publicKey.bytes));
+      expect(pubBytes.length, 32);
     });
 
-    group('EphemeralSessionService — Input Validation', () {
-      late EphemeralSessionService service;
+    // ── Test 2 — Fresh ephemeral key per handshake ──
+    test('Test 2 — Fresh ephemeral key per handshake: keys are unique and not reused', () async {
+      final req1 = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-FRESH-1',
+      );
 
-      setUp(() {
-        service = EphemeralSessionService();
-      });
+      final req2 = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-FRESH-2',
+      );
 
-      test('Test 11 — Rejects peer ephemeral key with wrong length', () async {
-        await service.generateEphemeralKeyPair();
+      expect(req1.ephemeralPublicKey, isNot(equals(req2.ephemeralPublicKey)),
+          reason: 'Every handshake must generate a fresh, distinct X25519 ephemeral key pair');
 
-        expect(
-          () async => service.deriveSessionKeys(
-            requestId: 'REQ-VAL-001',
-            localId: 'ML-A',
-            peerId: 'ML-B',
-            isInitiator: true,
-            peerEphemeralPublicKey: Uint8List(16), // wrong length
-            localIdentityPublicKey: Uint8List(32),
-            peerIdentityPublicKey: Uint8List(32),
-          ),
-          throwsA(isA<EphemeralSessionException>().having(
-            (e) => e.message,
-            'message',
-            contains('Peer ephemeral public key must be 32 bytes'),
-          )),
-        );
-      });
-
-      test('Test 12 — Rejects local identity key with wrong length', () async {
-        await service.generateEphemeralKeyPair();
-
-        expect(
-          () async => service.deriveSessionKeys(
-            requestId: 'REQ-VAL-002',
-            localId: 'ML-A',
-            peerId: 'ML-B',
-            isInitiator: true,
-            peerEphemeralPublicKey: Uint8List(32),
-            localIdentityPublicKey: Uint8List(16), // wrong length
-            peerIdentityPublicKey: Uint8List(32),
-          ),
-          throwsA(isA<EphemeralSessionException>().having(
-            (e) => e.message,
-            'message',
-            contains('Local identity public key must be 32 bytes'),
-          )),
-        );
-      });
-
-      test('Test 13 — Rejects peer identity key with wrong length', () async {
-        await service.generateEphemeralKeyPair();
-
-        expect(
-          () async => service.deriveSessionKeys(
-            requestId: 'REQ-VAL-003',
-            localId: 'ML-A',
-            peerId: 'ML-B',
-            isInitiator: true,
-            peerEphemeralPublicKey: Uint8List(32),
-            localIdentityPublicKey: Uint8List(32),
-            peerIdentityPublicKey: Uint8List(16), // wrong length
-          ),
-          throwsA(isA<EphemeralSessionException>().having(
-            (e) => e.message,
-            'message',
-            contains('Peer identity public key must be 32 bytes'),
-          )),
-        );
-      });
-
-      test('Test 14 — Throws when no ephemeral key pair has been generated', () async {
-        // No generateEphemeralKeyPair call, _currentKeyPair is null
-        // But getEphemeralPublicKey auto-generates, so we need to test the
-        // direct deriveSessionKeys path after clearAll
-        final svc = EphemeralSessionService();
-        await svc.generateEphemeralKeyPair();
-        svc.clearAll(); // clears both sessions and key pair
-
-        expect(
-          () async => svc.deriveSessionKeys(
-            requestId: 'REQ-VAL-004',
-            localId: 'ML-A',
-            peerId: 'ML-B',
-            isInitiator: true,
-            peerEphemeralPublicKey: Uint8List(32),
-            localIdentityPublicKey: Uint8List(32),
-            peerIdentityPublicKey: Uint8List(32),
-          ),
-          throwsA(isA<EphemeralSessionException>().having(
-            (e) => e.message,
-            'message',
-            contains('No ephemeral key pair available'),
-          )),
-        );
-      });
+      final pub1 = base64Url.decode(req1.ephemeralPublicKey);
+      final pub2 = base64Url.decode(req2.ephemeralPublicKey);
+      expect(pub1.length, 32);
+      expect(pub2.length, 32);
+      expect(pub1, isNot(equals(pub2)));
     });
 
-    group('EphemeralSessionService — HKDF Salt Symmetry', () {
-      test('Test 15 — Salt symmetry: swapping identity keys yields same session keys', () async {
-        // This test verifies that the HKDF salt is order-independent by
-        // deriving session keys from both sides with swapped identity keys.
-        final x25519 = X25519();
-        final aliceEphKp = await (await x25519.newKeyPair()).extract();
-        final bobEphKp = await (await x25519.newKeyPair()).extract();
+    // ── Test 3 — X25519 shared-secret agreement ──
+    test('Test 3 — X25519 shared-secret agreement: DH(A_priv, B_pub) == DH(B_priv, A_pub)', () async {
+      final kpA = await aliceSessionService.generateEphemeralKeyPair(requestId: 'REQ-DH-1');
+      final kpB = await bobSessionService.generateEphemeralKeyPair(requestId: 'REQ-DH-1');
 
-        // Use synthetic identity keys to prove order-independence
-        final keyA = Uint8List.fromList(List.generate(32, (i) => i));
-        final keyB = Uint8List.fromList(List.generate(32, (i) => 255 - i));
+      final aliceIdBytes = await aliceIdentity.getIdentityPublicKeyBytes();
+      final bobIdBytes = await bobIdentity.getIdentityPublicKeyBytes();
 
-        final svc1 = EphemeralSessionService();
-        final session1 = await svc1.deriveSessionKeys(
-          requestId: 'REQ-SALT-001',
-          localId: 'ML-A',
-          peerId: 'ML-B',
-          isInitiator: true,
-          peerEphemeralPublicKey: Uint8List.fromList(bobEphKp.publicKey.bytes),
-          localIdentityPublicKey: keyA,
-          peerIdentityPublicKey: keyB,
-          localKeyPair: aliceEphKp,
-        );
+      // Alice computes DH with Bob's ephemeral public key
+      final sessionA = await aliceSessionService.establishSession(
+        requestId: 'REQ-DH-1',
+        localId: 'ML-DEVICE-A',
+        peerId: 'ML-DEVICE-B',
+        isInitiator: true,
+        peerEphemeralPublicKey: kpB.publicKey.bytes,
+        localIdentityPublicKey: aliceIdBytes,
+        peerIdentityPublicKey: bobIdBytes,
+        localKeyPair: kpA,
+      );
 
-        // Same material but swapped roles — salt must be identical
-        final svc2 = EphemeralSessionService();
-        final session2 = await svc2.deriveSessionKeys(
-          requestId: 'REQ-SALT-001',
-          localId: 'ML-B',
-          peerId: 'ML-A',
-          isInitiator: false,
-          peerEphemeralPublicKey: Uint8List.fromList(aliceEphKp.publicKey.bytes),
-          localIdentityPublicKey: keyB,
-          peerIdentityPublicKey: keyA,
-          localKeyPair: bobEphKp,
-        );
+      // Bob computes DH with Alice's ephemeral public key
+      final sessionB = await bobSessionService.establishSession(
+        requestId: 'REQ-DH-1',
+        localId: 'ML-DEVICE-B',
+        peerId: 'ML-DEVICE-A',
+        isInitiator: false,
+        peerEphemeralPublicKey: kpA.publicKey.bytes,
+        localIdentityPublicKey: bobIdBytes,
+        peerIdentityPublicKey: aliceIdBytes,
+        localKeyPair: kpB,
+      );
 
-        expect(session1.initiatorToResponderKey, session2.initiatorToResponderKey,
-            reason: 'Swapping identity keys must not change derived keys');
-        expect(session1.responderToInitiatorKey, session2.responderToInitiatorKey);
-      });
-
-      test('Test 16 — Same identity keys on both sides still produces valid session', () async {
-        // Edge case: what if both peers somehow have the same identity key?
-        // The service must still derive valid, non-zero session keys.
-        final x25519 = X25519();
-        final aliceEphKp = await (await x25519.newKeyPair()).extract();
-        final bobEphKp = await (await x25519.newKeyPair()).extract();
-
-        final sameKey = Uint8List.fromList(List.generate(32, (i) => 42));
-
-        final svc = EphemeralSessionService();
-        final session = await svc.deriveSessionKeys(
-          requestId: 'REQ-SAME-001',
-          localId: 'ML-A',
-          peerId: 'ML-B',
-          isInitiator: true,
-          peerEphemeralPublicKey: Uint8List.fromList(bobEphKp.publicKey.bytes),
-          localIdentityPublicKey: sameKey,
-          peerIdentityPublicKey: sameKey,
-          localKeyPair: aliceEphKp,
-        );
-
-        expect(session.initiatorToResponderKey.length, 32);
-        expect(session.responderToInitiatorKey.length, 32);
-        expect(session.initiatorToResponderKey,
-            isNot(equals(Uint8List(32))),
-            reason: 'Keys should not be all zeros');
-      });
+      expect(sessionA.sharedSecret.length, 32, reason: 'X25519 shared secret must be 32 bytes');
+      expect(sessionB.sharedSecret.length, 32, reason: 'X25519 shared secret must be 32 bytes');
+      expect(sessionA.sharedSecret, equals(sessionB.sharedSecret),
+          reason: 'Both sides must compute the identical shared secret');
+      expect(
+        EphemeralSession.constantTimeCompare(sessionA.sharedSecret, sessionB.sharedSecret),
+        isTrue,
+        reason: 'Constant-time comparison must confirm equality',
+      );
     });
 
-    // ── Integrated Handshake + Session Tests ──
+    // ── Test 4 — Full Step 3 + Step 4 handshake ──
+    test('Test 4 — Full Step 3 + Step 4 handshake establishes matching ephemeral sessions', () async {
+      // 1. A creates key_request
+      final request = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-FULL-001',
+        timestamp: 1728000000000,
+      );
 
-    group('Integrated Handshake + Ephemeral Session', () {
-      late MeshIdentityService aliceIdentity;
-      late MeshIdentityService bobIdentity;
-      late EphemeralSessionService aliceSession;
-      late EphemeralSessionService bobSession;
-      late HandshakeService aliceHandshake;
-      late HandshakeService bobHandshake;
+      expect(request.protocolVersion, 2);
+      expect(request.ephemeralPublicKey.length, greaterThan(0));
+      expect(request.signature.length, greaterThan(0));
 
-      setUp(() async {
-        aliceIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
-        bobIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
-        await aliceIdentity.initialize();
-        await bobIdentity.initialize();
+      // 2. B verifies request
+      final verifiedReq = await bobHandshake.verifyKeyRequest(request);
+      expect(verifiedReq.isValid, isTrue);
 
-        aliceSession = EphemeralSessionService();
-        bobSession = EphemeralSessionService();
+      // 3. B creates key_response
+      final response = await bobHandshake.createKeyResponse(
+        request: request,
+        timestamp: 1728000001000,
+      );
 
-        aliceHandshake = HandshakeService(
-          identityService: aliceIdentity,
-          localId: 'ML-ALICE',
-          ephemeralKeyProvider: aliceSession,
-          sessionService: aliceSession,
-        );
+      expect(response.protocolVersion, 2);
+      expect(response.requestId, 'REQ-FULL-001');
 
-        bobHandshake = HandshakeService(
-          identityService: bobIdentity,
-          localId: 'ML-BOB',
-          ephemeralKeyProvider: bobSession,
-          sessionService: bobSession,
-        );
-      });
+      // 4. B derives shared secret and completes session as responder
+      final sessionB = await bobHandshake.completeSessionAsResponder(
+        verifiedRequest: verifiedReq,
+      );
 
-      test('Test 17 — Full handshake + session establishment end-to-end', () async {
-        // 1. Alice creates key_request (auto-generates ephemeral key pair via session service)
-        final request = await aliceHandshake.createKeyRequest(
-          destinationId: 'ML-BOB',
-          requestId: 'REQ-E2E-001',
-          timestamp: 1727900000000,
-        );
+      // 5. A verifies response
+      final verifiedResp = await aliceHandshake.verifyKeyResponse(response);
+      expect(verifiedResp.isValid, isTrue);
 
-        expect(request.protocolVersion, 2);
-        expect(request.ephemeralPublicKey, isNotEmpty);
+      // 6. A derives shared secret and completes session as initiator
+      final sessionA = await aliceHandshake.completeSessionAsInitiator(
+        verifiedResponse: verifiedResp,
+      );
 
-        // 2. Bob verifies the request
-        final verifiedReq = await bobHandshake.verifyKeyRequest(request);
-        expect(verifiedReq.isValid, isTrue);
+      // Verify sessions are established on both sides
+      expect(sessionA.isInitiator, isTrue);
+      expect(sessionB.isInitiator, isFalse);
+      expect(sessionA.peerId, 'ML-DEVICE-B');
+      expect(sessionB.peerId, 'ML-DEVICE-A');
+      expect(sessionA.requestId, 'REQ-FULL-001');
+      expect(sessionB.requestId, 'REQ-FULL-001');
 
-        // 3. Bob creates key_response (auto-generates his own ephemeral key pair)
-        final response = await bobHandshake.createKeyResponse(
-          request: request,
-          timestamp: 1727900001000,
-        );
+      // Shared secret agreement: secretA == secretB
+      expect(sessionA.sharedSecret.length, 32);
+      expect(sessionB.sharedSecret.length, 32);
+      expect(sessionA.sharedSecret, equals(sessionB.sharedSecret),
+          reason: 'secretA == secretB');
+      expect(
+        EphemeralSession.constantTimeCompare(sessionA.sharedSecret, sessionB.sharedSecret),
+        isTrue,
+      );
 
-        expect(response.protocolVersion, 2);
-        expect(response.ephemeralPublicKey, isNotEmpty);
+      // Session IDs must match across peers for the same handshake
+      expect(sessionA.sessionId, equals(sessionB.sessionId));
+      expect(sessionA.sessionId, startsWith('SESSION-REQ-FULL-001-'));
 
-        // 4. Bob completes session as responder
-        final bobSess = await bobHandshake.completeSessionAsResponder(
-          verifiedRequest: verifiedReq,
-        );
-
-        expect(bobSess.isInitiator, isFalse);
-        expect(bobSess.localId, 'ML-BOB');
-        expect(bobSess.peerId, 'ML-ALICE');
-        expect(bobSess.requestId, 'REQ-E2E-001');
-        expect(bobSess.initiatorToResponderKey.length, 32);
-        expect(bobSess.responderToInitiatorKey.length, 32);
-
-        // 5. Retrieve pending request before verification clears it
-        final pending = aliceHandshake.getPendingRequest('REQ-E2E-001');
-        expect(pending, isNotNull);
-
-        // 6. Alice verifies Bob's response
-        final verifiedResp = await aliceHandshake.verifyKeyResponse(response);
-        expect(verifiedResp.isValid, isTrue);
-
-        // 7. Alice completes session as initiator
-        final aliceSess = await aliceHandshake.completeSessionAsInitiator(
-          verifiedResponse: verifiedResp,
-          originalRequest: pending!,
-        );
-
-        expect(aliceSess.isInitiator, isTrue);
-        expect(aliceSess.localId, 'ML-ALICE');
-        expect(aliceSess.peerId, 'ML-BOB');
-
-        // 8. Both sides derived the same directional keys
-        expect(aliceSess.initiatorToResponderKey, bobSess.initiatorToResponderKey);
-        expect(aliceSess.responderToInitiatorKey, bobSess.responderToInitiatorKey);
-
-        // 9. Cross-verify convenience getters
-        expect(aliceSess.localEncryptionKey, bobSess.localDecryptionKey);
-        expect(bobSess.localEncryptionKey, aliceSess.localDecryptionKey);
-      });
-
-      test('Test 18 — Session completion fails without EphemeralSessionService', () async {
-        // Create a HandshakeService without sessionService
-        final noSessionHandshake = HandshakeService(
-          identityService: aliceIdentity,
-          localId: 'ML-ALICE',
-        );
-
-        final request = await noSessionHandshake.createKeyRequest(
-          destinationId: 'ML-BOB',
-          requestId: 'REQ-NO-SVC-001',
-        );
-
-        await bobHandshake.verifyKeyRequest(request);
-        final response = await bobHandshake.createKeyResponse(request: request);
-
-        final pending = noSessionHandshake.getPendingRequest('REQ-NO-SVC-001');
-        final verifiedResp = await noSessionHandshake.verifyKeyResponse(response);
-
-        expect(
-          () async => noSessionHandshake.completeSessionAsInitiator(
-            verifiedResponse: verifiedResp,
-            originalRequest: pending!,
-          ),
-          throwsA(isA<HandshakeException>().having(
-            (e) => e.code,
-            'code',
-            HandshakeErrorCode.sessionDerivationFailed,
-          )),
-        );
-      });
-
-      test('Test 19 — Session keys differ for different peer pairs', () async {
-        // Alice ↔ Bob session
-        final request1 = await aliceHandshake.createKeyRequest(
-          destinationId: 'ML-BOB',
-          requestId: 'REQ-PAIR-001',
-        );
-        final verifiedReq1 = await bobHandshake.verifyKeyRequest(request1);
-        final response1 = await bobHandshake.createKeyResponse(request: request1);
-        await bobHandshake.completeSessionAsResponder(
-          verifiedRequest: verifiedReq1,
-        );
-
-        final pending1 = aliceHandshake.getPendingRequest('REQ-PAIR-001');
-        final verifiedResp1 = await aliceHandshake.verifyKeyResponse(response1);
-        final aliceSess1 = await aliceHandshake.completeSessionAsInitiator(
-          verifiedResponse: verifiedResp1,
-          originalRequest: pending1!,
-        );
-
-        // Alice ↔ Charlie session (using a third identity)
-        final charlieIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
-        await charlieIdentity.initialize();
-        final charlieSession = EphemeralSessionService();
-        final charlieHandshake = HandshakeService(
-          identityService: charlieIdentity,
-          localId: 'ML-CHARLIE',
-          ephemeralKeyProvider: charlieSession,
-          sessionService: charlieSession,
-        );
-
-        // Need fresh ephemeral key pair for Alice's second handshake
-        final aliceSession2 = EphemeralSessionService();
-        final aliceHandshake2 = HandshakeService(
-          identityService: aliceIdentity,
-          localId: 'ML-ALICE',
-          ephemeralKeyProvider: aliceSession2,
-          sessionService: aliceSession2,
-        );
-
-        final request2 = await aliceHandshake2.createKeyRequest(
-          destinationId: 'ML-CHARLIE',
-          requestId: 'REQ-PAIR-002',
-        );
-        final verifiedReq2 = await charlieHandshake.verifyKeyRequest(request2);
-        final response2 = await charlieHandshake.createKeyResponse(request: request2);
-        await charlieHandshake.completeSessionAsResponder(
-          verifiedRequest: verifiedReq2,
-        );
-
-        final pending2 = aliceHandshake2.getPendingRequest('REQ-PAIR-002');
-        final verifiedResp2 = await aliceHandshake2.verifyKeyResponse(response2);
-        final aliceSess2 = await aliceHandshake2.completeSessionAsInitiator(
-          verifiedResponse: verifiedResp2,
-          originalRequest: pending2!,
-        );
-
-        // Keys for different peers must differ
-        expect(aliceSess1.initiatorToResponderKey,
-            isNot(equals(aliceSess2.initiatorToResponderKey)),
-            reason: 'Different peer pairs must yield different session keys');
-      });
-
-      test('Test 20 — EphemeralSession data model fields are correct', () async {
-        final request = await aliceHandshake.createKeyRequest(
-          destinationId: 'ML-BOB',
-          requestId: 'REQ-MODEL-001',
-          timestamp: 1727800000000,
-        );
-
-        final verifiedReq = await bobHandshake.verifyKeyRequest(request);
-
-        // Bob must create the response first (generates ephemeral key pair)
-        await bobHandshake.createKeyResponse(
-          request: request,
-          timestamp: 1727800001000,
-        );
-
-        final bobSess = await bobHandshake.completeSessionAsResponder(
-          verifiedRequest: verifiedReq,
-        );
-
-        expect(bobSess, isA<EphemeralSession>());
-        expect(bobSess.requestId, 'REQ-MODEL-001');
-        expect(bobSess.localId, 'ML-BOB');
-        expect(bobSess.peerId, 'ML-ALICE');
-        expect(bobSess.isInitiator, isFalse);
-        expect(bobSess.localEphemeralPublicKey.length, 32);
-        expect(bobSess.peerEphemeralPublicKey.length, 32);
-        expect(bobSess.initiatorToResponderKey.length, 32);
-        expect(bobSess.responderToInitiatorKey.length, 32);
-        expect(bobSess.createdAt, greaterThan(0));
-      });
-
-      test('Test 21 — Session derivation is deterministic for same ECDH material', () async {
-        // Generate key pairs manually to reuse
-        final x25519 = X25519();
-        final aliceEphKp = await (await x25519.newKeyPair()).extract();
-        final bobEphKp = await (await x25519.newKeyPair()).extract();
-
-        final aliceIdPub = await aliceIdentity.getIdentityPublicKeyBytes();
-        final bobIdPub = await bobIdentity.getIdentityPublicKeyBytes();
-
-        // Derive twice with same material
-        final svc1 = EphemeralSessionService();
-        final session1 = await svc1.deriveSessionKeys(
-          requestId: 'REQ-DET-001',
-          localId: 'ML-ALICE',
-          peerId: 'ML-BOB',
-          isInitiator: true,
-          peerEphemeralPublicKey: Uint8List.fromList(bobEphKp.publicKey.bytes),
-          localIdentityPublicKey: aliceIdPub,
-          peerIdentityPublicKey: bobIdPub,
-          localKeyPair: aliceEphKp,
-        );
-
-        final svc2 = EphemeralSessionService();
-        final session2 = await svc2.deriveSessionKeys(
-          requestId: 'REQ-DET-001',
-          localId: 'ML-ALICE',
-          peerId: 'ML-BOB',
-          isInitiator: true,
-          peerEphemeralPublicKey: Uint8List.fromList(bobEphKp.publicKey.bytes),
-          localIdentityPublicKey: aliceIdPub,
-          peerIdentityPublicKey: bobIdPub,
-          localKeyPair: aliceEphKp,
-        );
-
-        expect(session1.initiatorToResponderKey, session2.initiatorToResponderKey);
-        expect(session1.responderToInitiatorKey, session2.responderToInitiatorKey);
-      });
+      // Both handshake services report active sessions
+      expect(aliceHandshake.getActiveSession('ML-DEVICE-B'), isNotNull);
+      expect(bobHandshake.getActiveSession('ML-DEVICE-A'), isNotNull);
     });
 
-    // ── Backward Compatibility ──
+    // ── Test 5 — Tampered responder ephemeral key ──
+    test('Test 5 — Tampered responder ephemeral key fails signature verification with no session', () async {
+      final request = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-TAMPER-EPH-1',
+      );
 
-    group('Backward Compatibility with Step 3', () {
-      test('Test 22 — Step 3 handshake still works without session service', () async {
-        final aliceIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
-        final bobIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
-        await aliceIdentity.initialize();
-        await bobIdentity.initialize();
+      await bobHandshake.verifyKeyRequest(request);
+      final response = await bobHandshake.createKeyResponse(request: request);
 
-        // No sessionService, uses StaticEphemeralKeyProvider
-        final aliceHandshake = HandshakeService(
-          identityService: aliceIdentity,
-          localId: 'ML-ALICE',
-        );
-        final bobHandshake = HandshakeService(
-          identityService: bobIdentity,
-          localId: 'ML-BOB',
-        );
+      // Mallory alters Bob's ephemeral public key
+      final alteredEphKeyBytes = Uint8List(32)..fillRange(0, 32, 0x42);
+      final tamperedResponse = KeyResponsePacket(
+        protocolVersion: response.protocolVersion,
+        requestId: response.requestId,
+        originId: response.originId,
+        destinationId: response.destinationId,
+        timestamp: response.timestamp,
+        identityPublicKey: response.identityPublicKey,
+        ephemeralPublicKey: base64UrlEncode(alteredEphKeyBytes),
+        signature: response.signature,
+        initiatorIdentityPublicKey: response.initiatorIdentityPublicKey,
+        initiatorEphemeralPublicKey: response.initiatorEphemeralPublicKey,
+      );
 
-        final request = await aliceHandshake.createKeyRequest(
-          destinationId: 'ML-BOB',
-          requestId: 'REQ-COMPAT-001',
-        );
+      await expectLater(
+        aliceHandshake.verifyKeyResponse(tamperedResponse),
+        throwsA(isA<HandshakeException>().having(
+          (e) => e.code,
+          'code',
+          HandshakeErrorCode.invalidSignature,
+        )),
+      );
 
-        final verifiedReq = await bobHandshake.verifyKeyRequest(request);
-        expect(verifiedReq.isValid, isTrue);
-
-        final response = await bobHandshake.createKeyResponse(request: request);
-
-        final verifiedResp = await aliceHandshake.verifyKeyResponse(response);
-        expect(verifiedResp.isValid, isTrue);
-      });
-
-      test('Test 23 — sessionService getter returns null when not injected', () {
-        final identity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
-        final hs = HandshakeService(
-          identityService: identity,
-          localId: 'ML-TEST',
-        );
-
-        expect(hs.sessionService, isNull);
-      });
-
-      test('Test 24 — sessionService getter returns injected service', () {
-        final identity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
-        final svc = EphemeralSessionService();
-        final hs = HandshakeService(
-          identityService: identity,
-          localId: 'ML-TEST',
-          sessionService: svc,
-        );
-
-        expect(hs.sessionService, same(svc));
-      });
+      // Alice must have NO active session and pending request must be cleaned up
+      expect(aliceHandshake.getActiveSession('ML-DEVICE-B'), isNull);
+      expect(aliceSessionService.getSession('ML-DEVICE-B'), isNull);
+      expect(aliceHandshake.getPendingRequest('REQ-TAMPER-EPH-1'), isNull);
     });
 
-    // ── EphemeralSession Model Tests ──
+    // ── Test 6 — Tampered request ID ──
+    test('Test 6 — Tampered request ID results in no session and clean state', () async {
+      final request = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-ORIGINAL-ID',
+      );
 
-    group('EphemeralSession Model', () {
-      test('Test 25 — EphemeralSessionException toString format', () {
-        const e = EphemeralSessionException('test error message');
-        expect(e.toString(), 'EphemeralSessionException: test error message');
-        expect(e.message, 'test error message');
-      });
+      await bobHandshake.verifyKeyRequest(request);
+      final response = await bobHandshake.createKeyResponse(request: request);
+
+      // Response with mismatched requestId
+      final tamperedResponse = KeyResponsePacket(
+        protocolVersion: response.protocolVersion,
+        requestId: 'REQ-FORGED-ID',
+        originId: response.originId,
+        destinationId: response.destinationId,
+        timestamp: response.timestamp,
+        identityPublicKey: response.identityPublicKey,
+        ephemeralPublicKey: response.ephemeralPublicKey,
+        signature: response.signature,
+      );
+
+      await expectLater(
+        aliceHandshake.verifyKeyResponse(tamperedResponse),
+        throwsA(isA<HandshakeException>().having(
+          (e) => e.code,
+          'code',
+          HandshakeErrorCode.requestIdMismatch,
+        )),
+      );
+
+      expect(aliceHandshake.getActiveSession('ML-DEVICE-B'), isNull);
+      expect(aliceSessionService.hasSession('ML-DEVICE-B'), isFalse);
+    });
+
+    // ── Test 7 — Wrong peer identity ──
+    test('Test 7 — Wrong peer identity key causes verification failure and no session', () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      final repo = DriftMessageRepository(db);
+
+      // Alice records Bob with a known identity
+      final bobRealPub = await bobIdentity.getIdentityPublicKey();
+      await repo.savePeerIdentity(
+        PeerIdentityEntry(
+          peerId: 'ML-DEVICE-B',
+          identityPublicKey: bobRealPub,
+          safetyNumber: '123456',
+          trustStatus: 'tofu_unverified',
+          protocolVersion: 2,
+          firstSeenAt: DateTime.now(),
+          lastSeenAt: DateTime.now(),
+        ),
+      );
+
+      final aliceWithRepo = HandshakeService(
+        identityService: aliceIdentity,
+        localId: 'ML-DEVICE-A',
+        peerRepository: repo,
+        sessionService: aliceSessionService,
+      );
+
+      final request = await aliceWithRepo.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-WRONG-ID-1',
+      );
+
+      // Impostor Eve responds claiming to be Bob but with Eve's identity
+      final eveIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
+      await eveIdentity.initialize();
+      final eveHandshake = HandshakeService(
+        identityService: eveIdentity,
+        localId: 'ML-DEVICE-B', // Impersonating Bob
+      );
+
+      final eveResponse = await eveHandshake.createKeyResponse(request: request);
+
+      // Alice verifies against repo and rejects the key mismatch
+      await expectLater(
+        aliceWithRepo.verifyKeyResponse(eveResponse),
+        throwsA(isA<HandshakeException>().having(
+          (e) => e.code,
+          'code',
+          HandshakeErrorCode.peerIdentityMismatch,
+        )),
+      );
+
+      expect(aliceWithRepo.getActiveSession('ML-DEVICE-B'), isNull);
+      await db.close();
+    });
+
+    // ── Test 8 — Invalid X25519 public key lengths ──
+    test('Test 8 — Invalid X25519 public key lengths (empty, 31 bytes, 33 bytes) are rejected', () async {
+      final aliceIdBytes = await aliceIdentity.getIdentityPublicKeyBytes();
+      final bobIdBytes = await bobIdentity.getIdentityPublicKeyBytes();
+      await aliceSessionService.generateEphemeralKeyPair(requestId: 'REQ-LEN-TEST');
+
+      // Empty key
+      await expectLater(
+        aliceSessionService.establishSession(
+          requestId: 'REQ-LEN-TEST',
+          localId: 'ML-DEVICE-A',
+          peerId: 'ML-DEVICE-B',
+          isInitiator: true,
+          peerEphemeralPublicKey: Uint8List(0),
+          localIdentityPublicKey: aliceIdBytes,
+          peerIdentityPublicKey: bobIdBytes,
+        ),
+        throwsA(isA<EphemeralSessionException>().having(
+          (e) => e.message,
+          'message',
+          contains('must be 32 bytes (got 0)'),
+        )),
+      );
+
+      // 31 bytes
+      await expectLater(
+        aliceSessionService.establishSession(
+          requestId: 'REQ-LEN-TEST',
+          localId: 'ML-DEVICE-A',
+          peerId: 'ML-DEVICE-B',
+          isInitiator: true,
+          peerEphemeralPublicKey: Uint8List(31),
+          localIdentityPublicKey: aliceIdBytes,
+          peerIdentityPublicKey: bobIdBytes,
+        ),
+        throwsA(isA<EphemeralSessionException>().having(
+          (e) => e.message,
+          'message',
+          contains('must be 32 bytes (got 31)'),
+        )),
+      );
+
+      // 33 bytes
+      await expectLater(
+        aliceSessionService.establishSession(
+          requestId: 'REQ-LEN-TEST',
+          localId: 'ML-DEVICE-A',
+          peerId: 'ML-DEVICE-B',
+          isInitiator: true,
+          peerEphemeralPublicKey: Uint8List(33),
+          localIdentityPublicKey: aliceIdBytes,
+          peerIdentityPublicKey: bobIdBytes,
+        ),
+        throwsA(isA<EphemeralSessionException>().having(
+          (e) => e.message,
+          'message',
+          contains('must be 32 bytes (got 33)'),
+        )),
+      );
+    });
+
+    // ── Test 9 — Failed handshake leaves no session ──
+    test('Test 9 — Failed handshake leaves no active session and cleans up pending material', () async {
+      await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-FAIL-CLEAN-1',
+      );
+
+      expect(aliceHandshake.getPendingRequest('REQ-FAIL-CLEAN-1'), isNotNull);
+      expect(aliceSessionService.hasPendingKeyPair('REQ-FAIL-CLEAN-1'), isTrue);
+
+      // Malformed signature response
+      final invalidResponse = KeyResponsePacket(
+        protocolVersion: 2,
+        requestId: 'REQ-FAIL-CLEAN-1',
+        originId: 'ML-DEVICE-B',
+        destinationId: 'ML-DEVICE-A',
+        timestamp: DateTime.now().millisecondsSinceEpoch,
+        identityPublicKey: await bobIdentity.getIdentityPublicKey(),
+        ephemeralPublicKey: base64UrlEncode(Uint8List(32)),
+        signature: base64UrlEncode(Uint8List(64)), // Bogus signature
+      );
+
+      await expectLater(
+        aliceHandshake.verifyKeyResponse(invalidResponse),
+        throwsA(isA<HandshakeException>()),
+      );
+
+      // Active session must be null
+      expect(aliceHandshake.getActiveSession('ML-DEVICE-B'), isNull);
+      expect(aliceSessionService.activeSession, isNull);
+      expect(aliceSessionService.hasSession('ML-DEVICE-B'), isFalse);
+
+      // Pending state must be removed
+      expect(aliceHandshake.getPendingRequest('REQ-FAIL-CLEAN-1'), isNull);
+      expect(aliceSessionService.hasPendingKeyPair('REQ-FAIL-CLEAN-1'), isFalse);
+    });
+
+    // ── Test 10 — Session teardown ──
+    test('Test 10 — Session teardown destroys session and prevents reuse', () async {
+      // Establish session
+      final request = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-TEARDOWN-1',
+      );
+      final verifiedReq = await bobHandshake.verifyKeyRequest(request);
+      final response = await bobHandshake.createKeyResponse(request: request);
+      await bobHandshake.completeSessionAsResponder(verifiedRequest: verifiedReq);
+      final verifiedResp = await aliceHandshake.verifyKeyResponse(response);
+      final session = await aliceHandshake.completeSessionAsInitiator(verifiedResponse: verifiedResp);
+
+      expect(aliceHandshake.getActiveSession('ML-DEVICE-B'), isNotNull);
+      expect(aliceSessionService.hasSession('ML-DEVICE-B'), isTrue);
+      expect(session.isDestroyed, isFalse);
+
+      // Destroy session
+      aliceHandshake.clearSession('ML-DEVICE-B');
+
+      // Verify session no longer exists
+      expect(aliceHandshake.getActiveSession('ML-DEVICE-B'), isNull);
+      expect(aliceSessionService.hasSession('ML-DEVICE-B'), isFalse);
+      expect(aliceSessionService.getSession('ML-DEVICE-B'), isNull);
+      expect(aliceSessionService.getSessionById(session.sessionId), isNull);
+      expect(session.isDestroyed, isTrue);
+    });
+
+    // ── Test 11 — New session after teardown ──
+    test('Test 11 — New session after teardown produces fresh sessionId and ephemeral keys', () async {
+      // Handshake 1
+      final req1 = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-TD-NEW-1',
+      );
+      final vReq1 = await bobHandshake.verifyKeyRequest(req1);
+      final resp1 = await bobHandshake.createKeyResponse(request: req1);
+      final bSess1 = await bobHandshake.completeSessionAsResponder(verifiedRequest: vReq1);
+      final vResp1 = await aliceHandshake.verifyKeyResponse(resp1);
+      final aSess1 = await aliceHandshake.completeSessionAsInitiator(verifiedResponse: vResp1);
+
+      // Teardown both sides
+      aliceHandshake.clearSession('ML-DEVICE-B');
+      bobHandshake.clearSession('ML-DEVICE-A');
+
+      // Handshake 2
+      final req2 = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-TD-NEW-2',
+      );
+      final vReq2 = await bobHandshake.verifyKeyRequest(req2);
+      final resp2 = await bobHandshake.createKeyResponse(request: req2);
+      final bSess2 = await bobHandshake.completeSessionAsResponder(verifiedRequest: vReq2);
+      final vResp2 = await aliceHandshake.verifyKeyResponse(resp2);
+      final aSess2 = await aliceHandshake.completeSessionAsInitiator(verifiedResponse: vResp2);
+
+      // Session IDs must differ
+      expect(aSess1.sessionId, isNot(equals(aSess2.sessionId)));
+      expect(bSess1.sessionId, isNot(equals(bSess2.sessionId)));
+
+      // Ephemeral keys must differ
+      expect(aSess1.localEphemeralPublicKey, isNot(equals(aSess2.localEphemeralPublicKey)));
+      expect(bSess1.localEphemeralPublicKey, isNot(equals(bSess2.localEphemeralPublicKey)));
+
+      // Shared secrets must differ
+      expect(aSess1.sharedSecret, isNot(equals(aSess2.sharedSecret)));
+    });
+
+    // ── Test 12 — Peer isolation ──
+    test('Test 12 — Peer isolation: independent sessions A ↔ B and A ↔ C do not leak secrets or keys', () async {
+      // 1. A ↔ B handshake
+      final reqAB = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-ISO-AB',
+      );
+      final vReqAB = await bobHandshake.verifyKeyRequest(reqAB);
+      final respAB = await bobHandshake.createKeyResponse(request: reqAB);
+      final sessB = await bobHandshake.completeSessionAsResponder(verifiedRequest: vReqAB);
+      final vRespAB = await aliceHandshake.verifyKeyResponse(respAB);
+      final sessAB = await aliceHandshake.completeSessionAsInitiator(verifiedResponse: vRespAB);
+
+      // 2. A ↔ C handshake
+      final reqAC = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-C',
+        requestId: 'REQ-ISO-AC',
+      );
+      final vReqAC = await charlieHandshake.verifyKeyRequest(reqAC);
+      final respAC = await charlieHandshake.createKeyResponse(request: reqAC);
+      final sessC = await charlieHandshake.completeSessionAsResponder(verifiedRequest: vReqAC);
+      final vRespAC = await aliceHandshake.verifyKeyResponse(respAC);
+      final sessAC = await aliceHandshake.completeSessionAsInitiator(verifiedResponse: vRespAC);
+
+      // Peers are distinct
+      expect(sessAB.peerId, 'ML-DEVICE-B');
+      expect(sessAC.peerId, 'ML-DEVICE-C');
+      expect(sessAB.peerId, isNot(equals(sessAC.peerId)));
+
+      // Secrets are completely independent
+      expect(sessAB.sharedSecret, isNot(equals(sessAC.sharedSecret)));
+      expect(sessAB.sessionId, isNot(equals(sessAC.sessionId)));
+      expect(sessAB.localEphemeralPublicKey, isNot(equals(sessAC.localEphemeralPublicKey)));
+
+      // Matching verification
+      expect(sessAB.sharedSecret, equals(sessB.sharedSecret));
+      expect(sessAC.sharedSecret, equals(sessC.sharedSecret));
+    });
+
+    // ── Test 13 — Concurrent handshakes ──
+    test('Test 13 — Concurrent handshakes: multiple in-flight requests retain correct ephemeral private keys', () async {
+      // Alice initiates two handshakes to Bob concurrently
+      final req1 = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-CONCURRENT-1',
+      );
+      final req2 = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-CONCURRENT-2',
+      );
+
+      // Both pending requests exist simultaneously in memory
+      expect(aliceSessionService.hasPendingKeyPair('REQ-CONCURRENT-1'), isTrue);
+      expect(aliceSessionService.hasPendingKeyPair('REQ-CONCURRENT-2'), isTrue);
+      expect(aliceSessionService.pendingKeyPairsCount, greaterThanOrEqualTo(2));
+
+      // Bob verifies and responds to both
+      final vReq1 = await bobHandshake.verifyKeyRequest(req1);
+      final vReq2 = await bobHandshake.verifyKeyRequest(req2);
+
+      final resp1 = await bobHandshake.createKeyResponse(request: req1);
+      final resp2 = await bobHandshake.createKeyResponse(request: req2);
+
+      final bobSess1 = await bobHandshake.completeSessionAsResponder(verifiedRequest: vReq1);
+      final bobSess2 = await bobHandshake.completeSessionAsResponder(verifiedRequest: vReq2);
+
+      // Alice verifies responses out of order (2 then 1) to test correlation isolation
+      final vResp2 = await aliceHandshake.verifyKeyResponse(resp2);
+      final vResp1 = await aliceHandshake.verifyKeyResponse(resp1);
+
+      final aliceSess2 = await aliceHandshake.completeSessionAsInitiator(verifiedResponse: vResp2);
+      final aliceSess1 = await aliceHandshake.completeSessionAsInitiator(verifiedResponse: vResp1);
+
+      // Both sessions derive the correct matching shared secrets for their respective request IDs
+      expect(aliceSess1.sharedSecret, equals(bobSess1.sharedSecret));
+      expect(aliceSess2.sharedSecret, equals(bobSess2.sharedSecret));
+
+      // Secrets between the two concurrent handshakes are distinct
+      expect(aliceSess1.sharedSecret, isNot(equals(aliceSess2.sharedSecret)));
+      expect(aliceSess1.sessionId, isNot(equals(aliceSess2.sessionId)));
+    });
+
+    // ── Test 14 — No persistence of session secrets ──
+    test('Test 14 — No persistence of session secrets: private keys and shared secrets are never stored', () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      final repo = DriftMessageRepository(db);
+
+      final aliceWithDb = HandshakeService(
+        identityService: aliceIdentity,
+        localId: 'ML-DEVICE-A',
+        peerRepository: repo,
+        sessionService: aliceSessionService,
+      );
+
+      // Establish session
+      final request = await aliceWithDb.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-NO-PERSIST-1',
+      );
+      final vReq = await bobHandshake.verifyKeyRequest(request);
+      final response = await bobHandshake.createKeyResponse(request: request);
+      await bobHandshake.completeSessionAsResponder(verifiedRequest: vReq);
+      final vResp = await aliceWithDb.verifyKeyResponse(response);
+      final session = await aliceWithDb.completeSessionAsInitiator(verifiedResponse: vResp);
+
+      // Inspect SQLite database tables
+      final peerIdentities = await db.select(db.peerIdentitiesTable).get();
+      final messages = await db.select(db.messagesTable).get();
+      final seenPackets = await db.select(db.seenPacketsTable).get();
+
+      // Messages table and seenPackets table are clean
+      expect(messages, isEmpty);
+      expect(seenPackets, isEmpty);
+
+      // Verify that secret bytes do not appear in peerIdentitiesTable
+      final secretBase64 = base64UrlEncode(session.sharedSecret);
+      for (final p in peerIdentities) {
+        expect(p.identityPublicKey, isNot(contains(secretBase64)));
+      }
+
+      await db.close();
+    });
+
+    // ── Test 15 — Existing Step 3 regression ──
+    test('Test 15 — Existing Step 3 regression: authenticated Ed25519 handshake operates cleanly', () async {
+      final request = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-STEP3-REG',
+        timestamp: 1728050000000,
+      );
+
+      expect(request.protocolVersion, 2);
+      expect(request.originId, 'ML-DEVICE-A');
+      expect(request.destinationId, 'ML-DEVICE-B');
+      expect(request.identityPublicKey, await aliceIdentity.getIdentityPublicKey());
+
+      final vReq = await bobHandshake.verifyKeyRequest(request);
+      expect(vReq.isValid, isTrue);
+
+      final response = await bobHandshake.createKeyResponse(
+        request: request,
+        timestamp: 1728050001000,
+      );
+
+      expect(response.protocolVersion, 2);
+      expect(response.originId, 'ML-DEVICE-B');
+      expect(response.destinationId, 'ML-DEVICE-A');
+      expect(response.identityPublicKey, await bobIdentity.getIdentityPublicKey());
+
+      final vResp = await aliceHandshake.verifyKeyResponse(response);
+      expect(vResp.isValid, isTrue);
+    });
+
+    // ── Test 16 — Existing encryption regression ──
+    test('Test 16 — Existing encryption regression: MeshCryptoService operates independently and unchanged', () async {
+      final aliceCrypto = MeshCryptoService(keyStore: InMemoryKeyMaterialStore());
+      final bobCrypto = MeshCryptoService(keyStore: InMemoryKeyMaterialStore());
+
+      final alicePub = await aliceCrypto.localPublicKey();
+      final bobPub = await bobCrypto.localPublicKey();
+
+      aliceCrypto.rememberPeerKey('ML-BOB', bobPub);
+      bobCrypto.rememberPeerKey('ML-ALICE', alicePub);
+
+      final encrypted = await aliceCrypto.encrypt(
+        messageId: 'MSG-001',
+        originId: 'ML-ALICE',
+        destinationId: 'ML-BOB',
+        text: 'Hello MeshLink!',
+      );
+
+      final decrypted = await bobCrypto.decrypt(
+        messageId: 'MSG-001',
+        originId: 'ML-ALICE',
+        destinationId: 'ML-BOB',
+        nonce: encrypted.nonce,
+        ciphertext: encrypted.ciphertext,
+        mac: encrypted.mac,
+      );
+
+      expect(decrypted, 'Hello MeshLink!');
+    });
+
+    // ── Test 17 (Section 20) — Ephemeral key substitution security test ──
+    test('Test 17 — Security Test: Ephemeral key substitution fails Ed25519 signature and prevents session', () async {
+      // Alice creates signed key_request
+      final request = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-SEC-SUBST',
+      );
+
+      // Bob verifies and creates signed key_response
+      await bobHandshake.verifyKeyRequest(request);
+      final response = await bobHandshake.createKeyResponse(request: request);
+
+      // Attacker intercepts and substitutes Bob's ephemeral public key with attacker's key
+      final attackerAlgorithm = X25519();
+      final attackerKp = await attackerAlgorithm.newKeyPair();
+      final attackerPub = await attackerKp.extractPublicKey();
+
+      final substitutedResponse = KeyResponsePacket(
+        protocolVersion: response.protocolVersion,
+        requestId: response.requestId,
+        originId: response.originId,
+        destinationId: response.destinationId,
+        timestamp: response.timestamp,
+        identityPublicKey: response.identityPublicKey,
+        ephemeralPublicKey: base64UrlEncode(attackerPub.bytes), // Substituted key!
+        signature: response.signature,                          // Original Bob signature
+        initiatorIdentityPublicKey: response.initiatorIdentityPublicKey,
+        initiatorEphemeralPublicKey: response.initiatorEphemeralPublicKey,
+      );
+
+      // Alice's signature verification must reject the substituted ephemeral key
+      await expectLater(
+        aliceHandshake.verifyKeyResponse(substitutedResponse),
+        throwsA(isA<HandshakeException>().having(
+          (e) => e.code,
+          'code',
+          HandshakeErrorCode.invalidSignature,
+        )),
+      );
+
+      // Confirm X25519 session is NOT established
+      expect(aliceHandshake.getActiveSession('ML-DEVICE-B'), isNull);
+      expect(aliceSessionService.hasSession('ML-DEVICE-B'), isFalse);
+    });
+
+    // ── Additional Test: Session binding verification ──
+    test('Test 18 — Session binding: matchesBinding validates identity and ephemeral keys', () async {
+      final request = await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-BINDING-1',
+      );
+      final vReq = await bobHandshake.verifyKeyRequest(request);
+      final response = await bobHandshake.createKeyResponse(request: request);
+      await bobHandshake.completeSessionAsResponder(verifiedRequest: vReq);
+      final vResp = await aliceHandshake.verifyKeyResponse(response);
+      final session = await aliceHandshake.completeSessionAsInitiator(verifiedResponse: vResp);
+
+      final aliceIdBytes = await aliceIdentity.getIdentityPublicKeyBytes();
+      final bobIdBytes = await bobIdentity.getIdentityPublicKeyBytes();
+
+      // Valid binding
+      expect(
+        session.matchesBinding(
+          expectedRequestId: 'REQ-BINDING-1',
+          expectedLocalIdentityKey: aliceIdBytes,
+          expectedPeerIdentityKey: bobIdBytes,
+          expectedLocalEphemeralKey: session.localEphemeralPublicKey,
+          expectedPeerEphemeralKey: session.peerEphemeralPublicKey,
+        ),
+        isTrue,
+      );
+
+      // Wrong request ID
+      expect(
+        session.matchesBinding(
+          expectedRequestId: 'REQ-WRONG',
+          expectedLocalIdentityKey: aliceIdBytes,
+          expectedPeerIdentityKey: bobIdBytes,
+          expectedLocalEphemeralKey: session.localEphemeralPublicKey,
+          expectedPeerEphemeralKey: session.peerEphemeralPublicKey,
+        ),
+        isFalse,
+      );
+
+      // Wrong peer identity key
+      expect(
+        session.matchesBinding(
+          expectedRequestId: 'REQ-BINDING-1',
+          expectedLocalIdentityKey: aliceIdBytes,
+          expectedPeerIdentityKey: Uint8List(32),
+          expectedLocalEphemeralKey: session.localEphemeralPublicKey,
+          expectedPeerEphemeralKey: session.peerEphemeralPublicKey,
+        ),
+        isFalse,
+      );
+    });
+
+    // ── Additional Test: Clear pending requests ──
+    test('Test 19 — clearPendingRequest clears both pending handshake and ephemeral key material', () async {
+      await aliceHandshake.createKeyRequest(
+        destinationId: 'ML-DEVICE-B',
+        requestId: 'REQ-CLR-1',
+      );
+
+      expect(aliceHandshake.getPendingRequest('REQ-CLR-1'), isNotNull);
+      expect(aliceSessionService.hasPendingKeyPair('REQ-CLR-1'), isTrue);
+
+      aliceHandshake.clearPendingRequest('REQ-CLR-1');
+
+      expect(aliceHandshake.getPendingRequest('REQ-CLR-1'), isNull);
+      expect(aliceSessionService.hasPendingKeyPair('REQ-CLR-1'), isFalse);
     });
   });
 }

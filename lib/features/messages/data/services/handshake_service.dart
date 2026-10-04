@@ -171,10 +171,10 @@ class HandshakeTranscriptEncoder {
 ///
 /// Implementations:
 /// - [EphemeralSessionService] (Step 4): Real X25519 key pair generation with
-///   ECDH + HKDF session key derivation.
+///   ECDH shared secret agreement.
 /// - [StaticEphemeralKeyProvider]: Test-only provider with a fixed key.
 abstract class EphemeralKeyProvider {
-  Future<Uint8List> getEphemeralPublicKey();
+  Future<Uint8List> getEphemeralPublicKey({String? requestId});
 }
 
 /// Test-only [EphemeralKeyProvider] supplying a fixed or randomly generated
@@ -186,7 +186,7 @@ class StaticEphemeralKeyProvider implements EphemeralKeyProvider {
   static final _x25519 = X25519();
 
   @override
-  Future<Uint8List> getEphemeralPublicKey() async {
+  Future<Uint8List> getEphemeralPublicKey({String? requestId}) async {
     if (_key != null) return _key;
     final keyPair = await _x25519.newKeyPair();
     final pub = await keyPair.extractPublicKey();
@@ -194,7 +194,8 @@ class StaticEphemeralKeyProvider implements EphemeralKeyProvider {
   }
 }
 
-/// Service implementing the Step 3 authenticated Ed25519 handshake protocol.
+/// Service implementing the Step 3 authenticated Ed25519 handshake protocol
+/// and Step 4 ephemeral X25519 session establishment.
 ///
 /// Responsible for:
 /// - Creating and signing v2 `key_request` packets using local Ed25519 identity key.
@@ -202,6 +203,7 @@ class StaticEphemeralKeyProvider implements EphemeralKeyProvider {
 /// - Creating and signing v2 `key_response` packets binding initiator parameters.
 /// - Verifying incoming `key_response` packets against initiator pending state and responder Ed25519 key.
 /// - Checking known peer identity keys against [MessageRepository] to detect key mismatches.
+/// - Establishing in-memory ephemeral X25519 Diffie-Hellman sessions via [EphemeralSessionService].
 class HandshakeService {
   HandshakeService({
     required MeshIdentityService identityService,
@@ -214,9 +216,15 @@ class HandshakeService {
         _localId = localId,
         _peerRepository = peerRepository,
         _ed25519 = ed25519 ?? Ed25519(),
-        _ephemeralKeyProvider =
-            ephemeralKeyProvider ?? StaticEphemeralKeyProvider(),
-        _sessionService = sessionService;
+        _sessionService = sessionService ??
+            (ephemeralKeyProvider is EphemeralSessionService
+                ? ephemeralKeyProvider
+                : (ephemeralKeyProvider == null ? EphemeralSessionService() : null)),
+        _ephemeralKeyProvider = ephemeralKeyProvider ??
+            sessionService ??
+            (ephemeralKeyProvider == null
+                ? (sessionService ?? EphemeralSessionService())
+                : StaticEphemeralKeyProvider());
 
   final MeshIdentityService _identityService;
   String _localId;
@@ -257,9 +265,17 @@ class HandshakeService {
     final ts = timestamp ?? DateTime.now().millisecondsSinceEpoch;
 
     final idPubKeyBytes = await _identityService.getIdentityPublicKeyBytes();
-    final ephPubKeyBytes = ephemeralPublicKey != null
-        ? Uint8List.fromList(ephemeralPublicKey)
-        : await _ephemeralKeyProvider.getEphemeralPublicKey();
+    final Uint8List ephPubKeyBytes;
+    if (ephemeralPublicKey != null) {
+      ephPubKeyBytes = Uint8List.fromList(ephemeralPublicKey);
+    } else if (_sessionService != null) {
+      final kp =
+          await _sessionService.generateEphemeralKeyPair(requestId: reqId);
+      ephPubKeyBytes = Uint8List.fromList(kp.publicKey.bytes);
+    } else {
+      ephPubKeyBytes =
+          await _ephemeralKeyProvider.getEphemeralPublicKey(requestId: reqId);
+    }
 
     final transcript = HandshakeTranscriptEncoder.encodeKeyRequestTranscript(
       protocolVersion: 2,
@@ -400,9 +416,17 @@ class HandshakeService {
 
     final ts = timestamp ?? DateTime.now().millisecondsSinceEpoch;
     final responderIdBytes = await _identityService.getIdentityPublicKeyBytes();
-    final responderEphBytes = ephemeralPublicKey != null
-        ? Uint8List.fromList(ephemeralPublicKey)
-        : await _ephemeralKeyProvider.getEphemeralPublicKey();
+    final Uint8List responderEphBytes;
+    if (ephemeralPublicKey != null) {
+      responderEphBytes = Uint8List.fromList(ephemeralPublicKey);
+    } else if (_sessionService != null) {
+      final kp = await _sessionService
+          .generateEphemeralKeyPair(requestId: request.requestId);
+      responderEphBytes = Uint8List.fromList(kp.publicKey.bytes);
+    } else {
+      responderEphBytes = await _ephemeralKeyProvider.getEphemeralPublicKey(
+          requestId: request.requestId);
+    }
 
     final initiatorIdBytes =
         Uint8List.fromList(base64Url.decode(request.identityPublicKey));
@@ -464,139 +488,149 @@ class HandshakeService {
     }
 
     if (response.requestId != pending.requestId) {
+      _pendingRequests.remove(response.requestId);
+      _sessionService?.clearPendingKeyPair(response.requestId);
       throw HandshakeException(
         HandshakeErrorCode.requestIdMismatch,
         'Response requestId ${response.requestId} does not match pending ${pending.requestId}',
       );
     }
 
-    if (response.originId != pending.peerId ||
-        response.destinationId != pending.localId) {
-      throw const HandshakeException(
-        HandshakeErrorCode.invalidResponse,
-        'Origin or destination ID mismatch in key_response',
-      );
-    }
-
-    // Verify echoes if present in payload
-    if (response.initiatorIdentityPublicKey != null &&
-        response.initiatorIdentityPublicKey !=
-            base64UrlEncode(pending.initiatorIdentityPublicKey)) {
-      throw const HandshakeException(
-        HandshakeErrorCode.transcriptMismatch,
-        'Initiator identity key in response does not match original request',
-      );
-    }
-
-    if (response.initiatorEphemeralPublicKey != null &&
-        response.initiatorEphemeralPublicKey !=
-            base64UrlEncode(pending.initiatorEphemeralPublicKey)) {
-      throw const HandshakeException(
-        HandshakeErrorCode.transcriptMismatch,
-        'Initiator ephemeral key in response does not match original request',
-      );
-    }
-
-    final Uint8List responderIdBytes;
-    final Uint8List responderEphBytes;
-    final Uint8List sigBytes;
-
     try {
-      responderIdBytes =
-          Uint8List.fromList(base64Url.decode(response.identityPublicKey));
-      responderEphBytes =
-          Uint8List.fromList(base64Url.decode(response.ephemeralPublicKey));
-      sigBytes = Uint8List.fromList(base64Url.decode(response.signature));
-    } catch (e) {
-      throw HandshakeException(
-        HandshakeErrorCode.invalidEncoding,
-        'Malformed Base64URL in response keys or signature: $e',
-      );
-    }
-
-    if (responderIdBytes.length != 32 || responderEphBytes.length != 32) {
-      throw const HandshakeException(
-        HandshakeErrorCode.invalidKeyLength,
-        'Public keys must be 32 bytes',
-      );
-    }
-
-    if (sigBytes.length != 64) {
-      throw const HandshakeException(
-        HandshakeErrorCode.invalidSignature,
-        'Signature must be 64 bytes',
-      );
-    }
-
-    // Check if the peer's identity key has changed against stored records
-    if (_peerRepository != null) {
-      final knownPeer = await _peerRepository.getPeerIdentity(response.originId);
-      if (knownPeer != null &&
-          knownPeer.identityPublicKey != response.identityPublicKey) {
-        throw HandshakeException(
-          HandshakeErrorCode.peerIdentityMismatch,
-          'Known peer ${response.originId} presented a different identity key',
+      if (response.originId != pending.peerId ||
+          response.destinationId != pending.localId) {
+        throw const HandshakeException(
+          HandshakeErrorCode.invalidResponse,
+          'Origin or destination ID mismatch in key_response',
         );
       }
-    }
 
-    final effectiveInitIdKey =
-        overrideExpectedInitiatorIdentityKey ?? pending.initiatorIdentityPublicKey;
-    final effectiveInitEphKey =
-        overrideExpectedInitiatorEphemeralKey ?? pending.initiatorEphemeralPublicKey;
+      // Verify echoes if present in payload
+      if (response.initiatorIdentityPublicKey != null &&
+          response.initiatorIdentityPublicKey !=
+              base64UrlEncode(pending.initiatorIdentityPublicKey)) {
+        throw const HandshakeException(
+          HandshakeErrorCode.transcriptMismatch,
+          'Initiator identity key in response does not match original request',
+        );
+      }
 
-    final transcript = HandshakeTranscriptEncoder.encodeKeyResponseTranscript(
-      protocolVersion: response.protocolVersion,
-      timestamp: response.timestamp,
-      requestId: response.requestId,
-      originId: response.originId,
-      destinationId: response.destinationId,
-      initiatorIdentityKey: effectiveInitIdKey,
-      initiatorEphemeralKey: effectiveInitEphKey,
-      responderIdentityKey: responderIdBytes,
-      responderEphemeralKey: responderEphBytes,
-    );
+      if (response.initiatorEphemeralPublicKey != null &&
+          response.initiatorEphemeralPublicKey !=
+              base64UrlEncode(pending.initiatorEphemeralPublicKey)) {
+        throw const HandshakeException(
+          HandshakeErrorCode.transcriptMismatch,
+          'Initiator ephemeral key in response does not match original request',
+        );
+      }
 
-    final isValid = await _ed25519.verify(
-      transcript,
-      signature: Signature(
-        sigBytes,
-        publicKey: SimplePublicKey(responderIdBytes, type: KeyPairType.ed25519),
-      ),
-    );
+      final Uint8List responderIdBytes;
+      final Uint8List responderEphBytes;
+      final Uint8List sigBytes;
 
-    if (!isValid) {
-      throw const HandshakeException(
-        HandshakeErrorCode.invalidSignature,
-        'Response signature verification failed',
+      try {
+        responderIdBytes =
+            Uint8List.fromList(base64Url.decode(response.identityPublicKey));
+        responderEphBytes =
+            Uint8List.fromList(base64Url.decode(response.ephemeralPublicKey));
+        sigBytes = Uint8List.fromList(base64Url.decode(response.signature));
+      } catch (e) {
+        throw HandshakeException(
+          HandshakeErrorCode.invalidEncoding,
+          'Malformed Base64URL in response keys or signature: $e',
+        );
+      }
+
+      if (responderIdBytes.length != 32 || responderEphBytes.length != 32) {
+        throw const HandshakeException(
+          HandshakeErrorCode.invalidKeyLength,
+          'Public keys must be 32 bytes',
+        );
+      }
+
+      if (sigBytes.length != 64) {
+        throw const HandshakeException(
+          HandshakeErrorCode.invalidSignature,
+          'Signature must be 64 bytes',
+        );
+      }
+
+      // Check if the peer's identity key has changed against stored records
+      if (_peerRepository != null) {
+        final knownPeer =
+            await _peerRepository.getPeerIdentity(response.originId);
+        if (knownPeer != null &&
+            knownPeer.identityPublicKey != response.identityPublicKey) {
+          throw HandshakeException(
+            HandshakeErrorCode.peerIdentityMismatch,
+            'Known peer ${response.originId} presented a different identity key',
+          );
+        }
+      }
+
+      final effectiveInitIdKey = overrideExpectedInitiatorIdentityKey ??
+          pending.initiatorIdentityPublicKey;
+      final effectiveInitEphKey = overrideExpectedInitiatorEphemeralKey ??
+          pending.initiatorEphemeralPublicKey;
+
+      final transcript = HandshakeTranscriptEncoder.encodeKeyResponseTranscript(
+        protocolVersion: response.protocolVersion,
+        timestamp: response.timestamp,
+        requestId: response.requestId,
+        originId: response.originId,
+        destinationId: response.destinationId,
+        initiatorIdentityKey: effectiveInitIdKey,
+        initiatorEphemeralKey: effectiveInitEphKey,
+        responderIdentityKey: responderIdBytes,
+        responderEphemeralKey: responderEphBytes,
       );
+
+      final isValid = await _ed25519.verify(
+        transcript,
+        signature: Signature(
+          sigBytes,
+          publicKey:
+              SimplePublicKey(responderIdBytes, type: KeyPairType.ed25519),
+        ),
+      );
+
+      if (!isValid) {
+        throw const HandshakeException(
+          HandshakeErrorCode.invalidSignature,
+          'Response signature verification failed',
+        );
+      }
+
+      // Remove pending request on successful verification
+      _pendingRequests.remove(response.requestId);
+
+      return HandshakeVerificationResult(
+        isValid: true,
+        protocolVersion: response.protocolVersion,
+        requestId: response.requestId,
+        originId: response.originId,
+        destinationId: response.destinationId,
+        peerIdentityPublicKey: responderIdBytes,
+        peerEphemeralPublicKey: responderEphBytes,
+        timestamp: response.timestamp,
+      );
+    } catch (e) {
+      _pendingRequests.remove(response.requestId);
+      _sessionService?.clearPendingKeyPair(response.requestId);
+      rethrow;
     }
-
-    // Remove pending request on successful verification
-    _pendingRequests.remove(response.requestId);
-
-    return HandshakeVerificationResult(
-      isValid: true,
-      protocolVersion: response.protocolVersion,
-      requestId: response.requestId,
-      originId: response.originId,
-      destinationId: response.destinationId,
-      peerIdentityPublicKey: responderIdBytes,
-      peerEphemeralPublicKey: responderEphBytes,
-      timestamp: response.timestamp,
-    );
   }
 
   /// Completes the ephemeral session as the handshake **initiator** (A).
   ///
   /// Called after [verifyKeyResponse] succeeds. Uses the original pending
   /// request's ephemeral key pair and the responder's ephemeral public key
-  /// from the verified response to derive directional session keys.
+  /// from the verified response to establish the ephemeral X25519 shared secret.
   ///
-  /// Requires an [EphemeralSessionService] to be injected via the constructor.
+  /// Requires an [EphemeralSessionService] to be injected via constructor or default.
   Future<EphemeralSession> completeSessionAsInitiator({
     required HandshakeVerificationResult verifiedResponse,
-    required HandshakePendingRequest originalRequest,
+    HandshakePendingRequest? originalRequest,
   }) async {
     final svc = _sessionService;
     if (svc == null) {
@@ -609,7 +643,7 @@ class HandshakeService {
     final localIdPubKey = await _identityService.getIdentityPublicKeyBytes();
 
     try {
-      return await svc.deriveSessionKeys(
+      final session = await svc.establishSession(
         requestId: verifiedResponse.requestId,
         localId: _localId,
         peerId: verifiedResponse.originId,
@@ -618,11 +652,19 @@ class HandshakeService {
         localIdentityPublicKey: localIdPubKey,
         peerIdentityPublicKey: verifiedResponse.peerIdentityPublicKey,
       );
+      _pendingRequests.remove(verifiedResponse.requestId);
+      return session;
     } on EphemeralSessionException catch (e) {
+      _pendingRequests.remove(verifiedResponse.requestId);
+      svc.clearPendingKeyPair(verifiedResponse.requestId);
       throw HandshakeException(
         HandshakeErrorCode.sessionDerivationFailed,
         'Session derivation failed (initiator): ${e.message}',
       );
+    } catch (e) {
+      _pendingRequests.remove(verifiedResponse.requestId);
+      svc.clearPendingKeyPair(verifiedResponse.requestId);
+      rethrow;
     }
   }
 
@@ -630,9 +672,9 @@ class HandshakeService {
   ///
   /// Called after [createKeyResponse] succeeds. Uses the responder's ephemeral
   /// key pair and the initiator's ephemeral public key from the verified
-  /// request to derive directional session keys.
+  /// request to establish the ephemeral X25519 shared secret.
   ///
-  /// Requires an [EphemeralSessionService] to be injected via the constructor.
+  /// Requires an [EphemeralSessionService] to be injected via constructor or default.
   Future<EphemeralSession> completeSessionAsResponder({
     required HandshakeVerificationResult verifiedRequest,
   }) async {
@@ -647,7 +689,7 @@ class HandshakeService {
     final localIdPubKey = await _identityService.getIdentityPublicKeyBytes();
 
     try {
-      return await svc.deriveSessionKeys(
+      return await svc.establishSession(
         requestId: verifiedRequest.requestId,
         localId: _localId,
         peerId: verifiedRequest.originId,
@@ -657,19 +699,36 @@ class HandshakeService {
         peerIdentityPublicKey: verifiedRequest.peerIdentityPublicKey,
       );
     } on EphemeralSessionException catch (e) {
+      svc.clearPendingKeyPair(verifiedRequest.requestId);
       throw HandshakeException(
         HandshakeErrorCode.sessionDerivationFailed,
         'Session derivation failed (responder): ${e.message}',
       );
+    } catch (e) {
+      svc.clearPendingKeyPair(verifiedRequest.requestId);
+      rethrow;
     }
+  }
+
+  /// Returns the active established session for [peerId], if any.
+  EphemeralSession? getActiveSession(String peerId) =>
+      _sessionService?.getSession(peerId);
+
+  /// Returns the most recently established active session, if any.
+  EphemeralSession? get activeSession => _sessionService?.activeSession;
+
+  /// Tears down and removes the established session for [peerId].
+  void clearSession(String peerId) {
+    _sessionService?.removeSession(peerId);
   }
 
   /// Returns pending request matching [requestId], if any.
   HandshakePendingRequest? getPendingRequest(String requestId) =>
       _pendingRequests[requestId];
 
-  /// Clears in-memory pending request state.
+  /// Clears in-memory pending request and ephemeral key state for [requestId].
   void clearPendingRequest(String requestId) {
     _pendingRequests.remove(requestId);
+    _sessionService?.clearPendingKeyPair(requestId);
   }
 }
