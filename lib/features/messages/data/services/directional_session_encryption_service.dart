@@ -234,6 +234,8 @@ class DirectionalSessionEncryptionService {
       aad: aad,
     );
 
+    session.recordSentMessage();
+
     return SessionEncryptedPayload.fromSecretBox(secretBox);
   }
 
@@ -280,6 +282,7 @@ class DirectionalSessionEncryptionService {
         secretKey: secretKey,
         aad: aad,
       );
+      session.recordReceivedMessage();
       return Uint8List.fromList(decrypted);
     } on SecretBoxAuthenticationError catch (e) {
       throw DirectionalEncryptionException(

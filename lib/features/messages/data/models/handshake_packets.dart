@@ -14,6 +14,8 @@ enum HandshakeErrorCode {
   invalidKeyLength,
   invalidEncoding,
   sessionDerivationFailed,
+  concurrentHandshake,
+  invalidState,
 }
 
 /// Structured exception thrown on handshake verification, validation, or protocol failures.
