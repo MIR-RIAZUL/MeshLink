@@ -85,13 +85,112 @@ class SeenPacketsTable extends Table {
   ];
 }
 
-@DriftDatabase(tables: [MessagesTable, PeerIdentitiesTable, SeenPacketsTable])
+/// Table storing persistent file transfer metadata and lifecycle state.
+@DataClassName('FileTransferEntry')
+class FileTransfersTable extends Table {
+  /// Unique transfer identifier (e.g. FT-1727220000000-A1B2C3).
+  TextColumn get transferId => text()();
+
+  /// Stable conversation identifier (remote peer device ID).
+  TextColumn get conversationId => text()();
+
+  /// Remote peer device ID.
+  TextColumn get peerId => text()();
+
+  /// Transfer direction: 'outgoing' or 'incoming'.
+  TextColumn get direction => text()();
+
+  /// Original or sanitized file name.
+  TextColumn get fileName => text()();
+
+  /// Total file size in bytes (64-bit integer).
+  Int64Column get fileSize => int64()();
+
+  /// MIME type string (e.g. image/jpeg, application/octet-stream).
+  TextColumn get mimeType => text()();
+
+  /// SHA-256 hash of the entire file.
+  TextColumn get fileHash => text()();
+
+  /// Final local filesystem path once completed.
+  TextColumn get localPath => text()();
+
+  /// Staging / partial filesystem path during transfer.
+  TextColumn get stagingPath => text()();
+
+  /// Total number of chunks expected.
+  IntColumn get totalChunks => integer()();
+
+  /// Size of each chunk in bytes (except possibly the final chunk).
+  IntColumn get chunkSize => integer()();
+
+  /// Current transfer lifecycle status (e.g. pending, offered, accepted, transferring, paused, completed, failed, cancelled).
+  TextColumn get status => text()();
+
+  /// Creation timestamp.
+  DateTimeColumn get createdAt => dateTime()();
+
+  /// Last updated timestamp.
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {transferId};
+
+  List<TableIndex> get tableIndexes => [
+    TableIndex(name: 'idx_file_transfers_peer_id', columns: {#peerId}),
+    TableIndex(name: 'idx_file_transfers_status', columns: {#status}),
+    TableIndex(name: 'idx_file_transfers_updated_at', columns: {#updatedAt}),
+  ];
+
+  @override
+  List<String> get customConstraints => [
+    'CHECK (file_size >= 0)',
+    'CHECK (total_chunks >= 0)',
+    'CHECK (chunk_size > 0)',
+  ];
+}
+
+/// Table storing bookkeeping state for individual file chunks.
+@DataClassName('FileChunkEntry')
+class FileChunksTable extends Table {
+  /// Associated transfer ID.
+  TextColumn get transferId => text()();
+
+  /// 0-based index of this chunk.
+  IntColumn get chunkIndex => integer()();
+
+  /// Chunk status (e.g. 'pending', 'received', 'verified').
+  TextColumn get status => text()();
+
+  /// Local timestamp when chunk was received or recorded.
+  DateTimeColumn get receivedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {transferId, chunkIndex};
+
+  List<TableIndex> get tableIndexes => [
+    TableIndex(name: 'idx_file_chunks_transfer_id', columns: {#transferId}),
+  ];
+
+  @override
+  List<String> get customConstraints => [
+    'CHECK (chunk_index >= 0)',
+  ];
+}
+
+@DriftDatabase(tables: [
+  MessagesTable,
+  PeerIdentitiesTable,
+  SeenPacketsTable,
+  FileTransfersTable,
+  FileChunksTable,
+])
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor])
       : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 2;
+  int get schemaVersion => 3;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -102,6 +201,10 @@ class AppDatabase extends _$AppDatabase {
       if (from < 2) {
         await m.createTable(peerIdentitiesTable);
         await m.createTable(seenPacketsTable);
+      }
+      if (from < 3) {
+        await m.createTable(fileTransfersTable);
+        await m.createTable(fileChunksTable);
       }
     },
   );
@@ -260,6 +363,113 @@ class AppDatabase extends _$AppDatabase {
   Future<int> updateTrustStatus(String peerId, String status) {
     return (update(peerIdentitiesTable)..where((t) => t.peerId.equals(peerId)))
         .write(PeerIdentitiesTableCompanion(trustStatus: Value(status)));
+  }
+
+  // --- File Transfer Operations ---
+
+  /// Insert or replace a file transfer record.
+  Future<int> insertFileTransfer(FileTransfersTableCompanion entry) {
+    return into(fileTransfersTable).insertOnConflictUpdate(entry);
+  }
+
+  /// Retrieve a file transfer by transfer ID.
+  Future<FileTransferEntry?> getFileTransfer(String transferId) {
+    return (select(fileTransfersTable)
+          ..where((t) => t.transferId.equals(transferId)))
+        .getSingleOrNull();
+  }
+
+  /// Get all file transfers for a specific peer ID, ordered by createdAt descending.
+  Future<List<FileTransferEntry>> getFileTransfersForPeer(String peerId) {
+    return (select(fileTransfersTable)
+          ..where((t) => t.peerId.equals(peerId))
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+        .get();
+  }
+
+  /// Get all file transfers across all peers, ordered by createdAt descending.
+  Future<List<FileTransferEntry>> getAllFileTransfers() {
+    return (select(fileTransfersTable)
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+        .get();
+  }
+
+  /// Update the status of a specific file transfer.
+  Future<int> updateFileTransferStatus(
+    String transferId,
+    String status, {
+    DateTime? updatedAt,
+  }) {
+    return (update(fileTransfersTable)
+          ..where((t) => t.transferId.equals(transferId)))
+        .write(
+      FileTransfersTableCompanion(
+        status: Value(status),
+        updatedAt: Value(updatedAt ?? DateTime.now()),
+      ),
+    );
+  }
+
+  /// Update an existing file transfer record with new values.
+  Future<bool> updateFileTransfer(FileTransfersTableCompanion entry) {
+    return update(fileTransfersTable).replace(entry);
+  }
+
+  /// Delete a file transfer record by transfer ID.
+  Future<int> deleteFileTransfer(String transferId) {
+    return (delete(fileTransfersTable)
+          ..where((t) => t.transferId.equals(transferId)))
+        .go();
+  }
+
+  // --- File Chunk Operations ---
+
+  /// Insert or replace a file chunk record.
+  Future<int> insertFileChunk(FileChunksTableCompanion entry) {
+    return into(fileChunksTable).insertOnConflictUpdate(entry);
+  }
+
+  /// Retrieve a specific chunk record for a transfer.
+  Future<FileChunkEntry?> getFileChunk(String transferId, int chunkIndex) {
+    return (select(fileChunksTable)
+          ..where(
+            (t) =>
+                t.transferId.equals(transferId) &
+                t.chunkIndex.equals(chunkIndex),
+          ))
+        .getSingleOrNull();
+  }
+
+  /// Get all chunks recorded for a specific transfer, ordered by chunkIndex ascending.
+  Future<List<FileChunkEntry>> getFileChunks(String transferId) {
+    return (select(fileChunksTable)
+          ..where((t) => t.transferId.equals(transferId))
+          ..orderBy([(t) => OrderingTerm.asc(t.chunkIndex)]))
+        .get();
+  }
+
+  /// Mark a chunk as received (or update its status and timestamp).
+  Future<int> markChunkReceived(
+    String transferId,
+    int chunkIndex, {
+    String status = 'received',
+    DateTime? receivedAt,
+  }) {
+    return into(fileChunksTable).insertOnConflictUpdate(
+      FileChunksTableCompanion(
+        transferId: Value(transferId),
+        chunkIndex: Value(chunkIndex),
+        status: Value(status),
+        receivedAt: Value(receivedAt ?? DateTime.now()),
+      ),
+    );
+  }
+
+  /// Delete all chunks for a specific transfer.
+  Future<int> deleteFileChunks(String transferId) {
+    return (delete(fileChunksTable)
+          ..where((t) => t.transferId.equals(transferId)))
+        .go();
   }
 }
 

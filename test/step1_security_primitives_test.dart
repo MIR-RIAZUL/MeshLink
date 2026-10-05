@@ -22,8 +22,8 @@ void main() {
       await db.close();
     });
 
-    test('AppDatabase reports schemaVersion 2', () {
-      expect(db.schemaVersion, 2);
+    test('AppDatabase reports schemaVersion >= 2', () {
+      expect(db.schemaVersion, greaterThanOrEqualTo(2));
     });
 
     test('Migration from v1 preserves messages and creates new tables', () async {

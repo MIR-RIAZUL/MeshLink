@@ -1387,6 +1387,1233 @@ class SeenPacketsTableCompanion extends UpdateCompanion<SeenPacketEntry> {
   }
 }
 
+class $FileTransfersTableTable extends FileTransfersTable
+    with TableInfo<$FileTransfersTableTable, FileTransferEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $FileTransfersTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _transferIdMeta = const VerificationMeta(
+    'transferId',
+  );
+  @override
+  late final GeneratedColumn<String> transferId = GeneratedColumn<String>(
+    'transfer_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _conversationIdMeta = const VerificationMeta(
+    'conversationId',
+  );
+  @override
+  late final GeneratedColumn<String> conversationId = GeneratedColumn<String>(
+    'conversation_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _peerIdMeta = const VerificationMeta('peerId');
+  @override
+  late final GeneratedColumn<String> peerId = GeneratedColumn<String>(
+    'peer_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _directionMeta = const VerificationMeta(
+    'direction',
+  );
+  @override
+  late final GeneratedColumn<String> direction = GeneratedColumn<String>(
+    'direction',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _fileNameMeta = const VerificationMeta(
+    'fileName',
+  );
+  @override
+  late final GeneratedColumn<String> fileName = GeneratedColumn<String>(
+    'file_name',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _fileSizeMeta = const VerificationMeta(
+    'fileSize',
+  );
+  @override
+  late final GeneratedColumn<BigInt> fileSize = GeneratedColumn<BigInt>(
+    'file_size',
+    aliasedName,
+    false,
+    type: DriftSqlType.bigInt,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _mimeTypeMeta = const VerificationMeta(
+    'mimeType',
+  );
+  @override
+  late final GeneratedColumn<String> mimeType = GeneratedColumn<String>(
+    'mime_type',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _fileHashMeta = const VerificationMeta(
+    'fileHash',
+  );
+  @override
+  late final GeneratedColumn<String> fileHash = GeneratedColumn<String>(
+    'file_hash',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _localPathMeta = const VerificationMeta(
+    'localPath',
+  );
+  @override
+  late final GeneratedColumn<String> localPath = GeneratedColumn<String>(
+    'local_path',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _stagingPathMeta = const VerificationMeta(
+    'stagingPath',
+  );
+  @override
+  late final GeneratedColumn<String> stagingPath = GeneratedColumn<String>(
+    'staging_path',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _totalChunksMeta = const VerificationMeta(
+    'totalChunks',
+  );
+  @override
+  late final GeneratedColumn<int> totalChunks = GeneratedColumn<int>(
+    'total_chunks',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _chunkSizeMeta = const VerificationMeta(
+    'chunkSize',
+  );
+  @override
+  late final GeneratedColumn<int> chunkSize = GeneratedColumn<int>(
+    'chunk_size',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+    'status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    transferId,
+    conversationId,
+    peerId,
+    direction,
+    fileName,
+    fileSize,
+    mimeType,
+    fileHash,
+    localPath,
+    stagingPath,
+    totalChunks,
+    chunkSize,
+    status,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'file_transfers_table';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<FileTransferEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('transfer_id')) {
+      context.handle(
+        _transferIdMeta,
+        transferId.isAcceptableOrUnknown(data['transfer_id']!, _transferIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_transferIdMeta);
+    }
+    if (data.containsKey('conversation_id')) {
+      context.handle(
+        _conversationIdMeta,
+        conversationId.isAcceptableOrUnknown(
+          data['conversation_id']!,
+          _conversationIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_conversationIdMeta);
+    }
+    if (data.containsKey('peer_id')) {
+      context.handle(
+        _peerIdMeta,
+        peerId.isAcceptableOrUnknown(data['peer_id']!, _peerIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_peerIdMeta);
+    }
+    if (data.containsKey('direction')) {
+      context.handle(
+        _directionMeta,
+        direction.isAcceptableOrUnknown(data['direction']!, _directionMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_directionMeta);
+    }
+    if (data.containsKey('file_name')) {
+      context.handle(
+        _fileNameMeta,
+        fileName.isAcceptableOrUnknown(data['file_name']!, _fileNameMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_fileNameMeta);
+    }
+    if (data.containsKey('file_size')) {
+      context.handle(
+        _fileSizeMeta,
+        fileSize.isAcceptableOrUnknown(data['file_size']!, _fileSizeMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_fileSizeMeta);
+    }
+    if (data.containsKey('mime_type')) {
+      context.handle(
+        _mimeTypeMeta,
+        mimeType.isAcceptableOrUnknown(data['mime_type']!, _mimeTypeMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_mimeTypeMeta);
+    }
+    if (data.containsKey('file_hash')) {
+      context.handle(
+        _fileHashMeta,
+        fileHash.isAcceptableOrUnknown(data['file_hash']!, _fileHashMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_fileHashMeta);
+    }
+    if (data.containsKey('local_path')) {
+      context.handle(
+        _localPathMeta,
+        localPath.isAcceptableOrUnknown(data['local_path']!, _localPathMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_localPathMeta);
+    }
+    if (data.containsKey('staging_path')) {
+      context.handle(
+        _stagingPathMeta,
+        stagingPath.isAcceptableOrUnknown(
+          data['staging_path']!,
+          _stagingPathMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_stagingPathMeta);
+    }
+    if (data.containsKey('total_chunks')) {
+      context.handle(
+        _totalChunksMeta,
+        totalChunks.isAcceptableOrUnknown(
+          data['total_chunks']!,
+          _totalChunksMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_totalChunksMeta);
+    }
+    if (data.containsKey('chunk_size')) {
+      context.handle(
+        _chunkSizeMeta,
+        chunkSize.isAcceptableOrUnknown(data['chunk_size']!, _chunkSizeMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_chunkSizeMeta);
+    }
+    if (data.containsKey('status')) {
+      context.handle(
+        _statusMeta,
+        status.isAcceptableOrUnknown(data['status']!, _statusMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_statusMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {transferId};
+  @override
+  FileTransferEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return FileTransferEntry(
+      transferId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}transfer_id'],
+      )!,
+      conversationId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}conversation_id'],
+      )!,
+      peerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}peer_id'],
+      )!,
+      direction: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}direction'],
+      )!,
+      fileName: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}file_name'],
+      )!,
+      fileSize: attachedDatabase.typeMapping.read(
+        DriftSqlType.bigInt,
+        data['${effectivePrefix}file_size'],
+      )!,
+      mimeType: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}mime_type'],
+      )!,
+      fileHash: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}file_hash'],
+      )!,
+      localPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}local_path'],
+      )!,
+      stagingPath: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}staging_path'],
+      )!,
+      totalChunks: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}total_chunks'],
+      )!,
+      chunkSize: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}chunk_size'],
+      )!,
+      status: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}status'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $FileTransfersTableTable createAlias(String alias) {
+    return $FileTransfersTableTable(attachedDatabase, alias);
+  }
+}
+
+class FileTransferEntry extends DataClass
+    implements Insertable<FileTransferEntry> {
+  /// Unique transfer identifier (e.g. FT-1727220000000-A1B2C3).
+  final String transferId;
+
+  /// Stable conversation identifier (remote peer device ID).
+  final String conversationId;
+
+  /// Remote peer device ID.
+  final String peerId;
+
+  /// Transfer direction: 'outgoing' or 'incoming'.
+  final String direction;
+
+  /// Original or sanitized file name.
+  final String fileName;
+
+  /// Total file size in bytes (64-bit integer).
+  final BigInt fileSize;
+
+  /// MIME type string (e.g. image/jpeg, application/octet-stream).
+  final String mimeType;
+
+  /// SHA-256 hash of the entire file.
+  final String fileHash;
+
+  /// Final local filesystem path once completed.
+  final String localPath;
+
+  /// Staging / partial filesystem path during transfer.
+  final String stagingPath;
+
+  /// Total number of chunks expected.
+  final int totalChunks;
+
+  /// Size of each chunk in bytes (except possibly the final chunk).
+  final int chunkSize;
+
+  /// Current transfer lifecycle status (e.g. pending, offered, accepted, transferring, paused, completed, failed, cancelled).
+  final String status;
+
+  /// Creation timestamp.
+  final DateTime createdAt;
+
+  /// Last updated timestamp.
+  final DateTime updatedAt;
+  const FileTransferEntry({
+    required this.transferId,
+    required this.conversationId,
+    required this.peerId,
+    required this.direction,
+    required this.fileName,
+    required this.fileSize,
+    required this.mimeType,
+    required this.fileHash,
+    required this.localPath,
+    required this.stagingPath,
+    required this.totalChunks,
+    required this.chunkSize,
+    required this.status,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['transfer_id'] = Variable<String>(transferId);
+    map['conversation_id'] = Variable<String>(conversationId);
+    map['peer_id'] = Variable<String>(peerId);
+    map['direction'] = Variable<String>(direction);
+    map['file_name'] = Variable<String>(fileName);
+    map['file_size'] = Variable<BigInt>(fileSize);
+    map['mime_type'] = Variable<String>(mimeType);
+    map['file_hash'] = Variable<String>(fileHash);
+    map['local_path'] = Variable<String>(localPath);
+    map['staging_path'] = Variable<String>(stagingPath);
+    map['total_chunks'] = Variable<int>(totalChunks);
+    map['chunk_size'] = Variable<int>(chunkSize);
+    map['status'] = Variable<String>(status);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  FileTransfersTableCompanion toCompanion(bool nullToAbsent) {
+    return FileTransfersTableCompanion(
+      transferId: Value(transferId),
+      conversationId: Value(conversationId),
+      peerId: Value(peerId),
+      direction: Value(direction),
+      fileName: Value(fileName),
+      fileSize: Value(fileSize),
+      mimeType: Value(mimeType),
+      fileHash: Value(fileHash),
+      localPath: Value(localPath),
+      stagingPath: Value(stagingPath),
+      totalChunks: Value(totalChunks),
+      chunkSize: Value(chunkSize),
+      status: Value(status),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory FileTransferEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return FileTransferEntry(
+      transferId: serializer.fromJson<String>(json['transferId']),
+      conversationId: serializer.fromJson<String>(json['conversationId']),
+      peerId: serializer.fromJson<String>(json['peerId']),
+      direction: serializer.fromJson<String>(json['direction']),
+      fileName: serializer.fromJson<String>(json['fileName']),
+      fileSize: serializer.fromJson<BigInt>(json['fileSize']),
+      mimeType: serializer.fromJson<String>(json['mimeType']),
+      fileHash: serializer.fromJson<String>(json['fileHash']),
+      localPath: serializer.fromJson<String>(json['localPath']),
+      stagingPath: serializer.fromJson<String>(json['stagingPath']),
+      totalChunks: serializer.fromJson<int>(json['totalChunks']),
+      chunkSize: serializer.fromJson<int>(json['chunkSize']),
+      status: serializer.fromJson<String>(json['status']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'transferId': serializer.toJson<String>(transferId),
+      'conversationId': serializer.toJson<String>(conversationId),
+      'peerId': serializer.toJson<String>(peerId),
+      'direction': serializer.toJson<String>(direction),
+      'fileName': serializer.toJson<String>(fileName),
+      'fileSize': serializer.toJson<BigInt>(fileSize),
+      'mimeType': serializer.toJson<String>(mimeType),
+      'fileHash': serializer.toJson<String>(fileHash),
+      'localPath': serializer.toJson<String>(localPath),
+      'stagingPath': serializer.toJson<String>(stagingPath),
+      'totalChunks': serializer.toJson<int>(totalChunks),
+      'chunkSize': serializer.toJson<int>(chunkSize),
+      'status': serializer.toJson<String>(status),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  FileTransferEntry copyWith({
+    String? transferId,
+    String? conversationId,
+    String? peerId,
+    String? direction,
+    String? fileName,
+    BigInt? fileSize,
+    String? mimeType,
+    String? fileHash,
+    String? localPath,
+    String? stagingPath,
+    int? totalChunks,
+    int? chunkSize,
+    String? status,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) => FileTransferEntry(
+    transferId: transferId ?? this.transferId,
+    conversationId: conversationId ?? this.conversationId,
+    peerId: peerId ?? this.peerId,
+    direction: direction ?? this.direction,
+    fileName: fileName ?? this.fileName,
+    fileSize: fileSize ?? this.fileSize,
+    mimeType: mimeType ?? this.mimeType,
+    fileHash: fileHash ?? this.fileHash,
+    localPath: localPath ?? this.localPath,
+    stagingPath: stagingPath ?? this.stagingPath,
+    totalChunks: totalChunks ?? this.totalChunks,
+    chunkSize: chunkSize ?? this.chunkSize,
+    status: status ?? this.status,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  FileTransferEntry copyWithCompanion(FileTransfersTableCompanion data) {
+    return FileTransferEntry(
+      transferId: data.transferId.present
+          ? data.transferId.value
+          : this.transferId,
+      conversationId: data.conversationId.present
+          ? data.conversationId.value
+          : this.conversationId,
+      peerId: data.peerId.present ? data.peerId.value : this.peerId,
+      direction: data.direction.present ? data.direction.value : this.direction,
+      fileName: data.fileName.present ? data.fileName.value : this.fileName,
+      fileSize: data.fileSize.present ? data.fileSize.value : this.fileSize,
+      mimeType: data.mimeType.present ? data.mimeType.value : this.mimeType,
+      fileHash: data.fileHash.present ? data.fileHash.value : this.fileHash,
+      localPath: data.localPath.present ? data.localPath.value : this.localPath,
+      stagingPath: data.stagingPath.present
+          ? data.stagingPath.value
+          : this.stagingPath,
+      totalChunks: data.totalChunks.present
+          ? data.totalChunks.value
+          : this.totalChunks,
+      chunkSize: data.chunkSize.present ? data.chunkSize.value : this.chunkSize,
+      status: data.status.present ? data.status.value : this.status,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('FileTransferEntry(')
+          ..write('transferId: $transferId, ')
+          ..write('conversationId: $conversationId, ')
+          ..write('peerId: $peerId, ')
+          ..write('direction: $direction, ')
+          ..write('fileName: $fileName, ')
+          ..write('fileSize: $fileSize, ')
+          ..write('mimeType: $mimeType, ')
+          ..write('fileHash: $fileHash, ')
+          ..write('localPath: $localPath, ')
+          ..write('stagingPath: $stagingPath, ')
+          ..write('totalChunks: $totalChunks, ')
+          ..write('chunkSize: $chunkSize, ')
+          ..write('status: $status, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    transferId,
+    conversationId,
+    peerId,
+    direction,
+    fileName,
+    fileSize,
+    mimeType,
+    fileHash,
+    localPath,
+    stagingPath,
+    totalChunks,
+    chunkSize,
+    status,
+    createdAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is FileTransferEntry &&
+          other.transferId == this.transferId &&
+          other.conversationId == this.conversationId &&
+          other.peerId == this.peerId &&
+          other.direction == this.direction &&
+          other.fileName == this.fileName &&
+          other.fileSize == this.fileSize &&
+          other.mimeType == this.mimeType &&
+          other.fileHash == this.fileHash &&
+          other.localPath == this.localPath &&
+          other.stagingPath == this.stagingPath &&
+          other.totalChunks == this.totalChunks &&
+          other.chunkSize == this.chunkSize &&
+          other.status == this.status &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class FileTransfersTableCompanion extends UpdateCompanion<FileTransferEntry> {
+  final Value<String> transferId;
+  final Value<String> conversationId;
+  final Value<String> peerId;
+  final Value<String> direction;
+  final Value<String> fileName;
+  final Value<BigInt> fileSize;
+  final Value<String> mimeType;
+  final Value<String> fileHash;
+  final Value<String> localPath;
+  final Value<String> stagingPath;
+  final Value<int> totalChunks;
+  final Value<int> chunkSize;
+  final Value<String> status;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const FileTransfersTableCompanion({
+    this.transferId = const Value.absent(),
+    this.conversationId = const Value.absent(),
+    this.peerId = const Value.absent(),
+    this.direction = const Value.absent(),
+    this.fileName = const Value.absent(),
+    this.fileSize = const Value.absent(),
+    this.mimeType = const Value.absent(),
+    this.fileHash = const Value.absent(),
+    this.localPath = const Value.absent(),
+    this.stagingPath = const Value.absent(),
+    this.totalChunks = const Value.absent(),
+    this.chunkSize = const Value.absent(),
+    this.status = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  FileTransfersTableCompanion.insert({
+    required String transferId,
+    required String conversationId,
+    required String peerId,
+    required String direction,
+    required String fileName,
+    required BigInt fileSize,
+    required String mimeType,
+    required String fileHash,
+    required String localPath,
+    required String stagingPath,
+    required int totalChunks,
+    required int chunkSize,
+    required String status,
+    required DateTime createdAt,
+    required DateTime updatedAt,
+    this.rowid = const Value.absent(),
+  }) : transferId = Value(transferId),
+       conversationId = Value(conversationId),
+       peerId = Value(peerId),
+       direction = Value(direction),
+       fileName = Value(fileName),
+       fileSize = Value(fileSize),
+       mimeType = Value(mimeType),
+       fileHash = Value(fileHash),
+       localPath = Value(localPath),
+       stagingPath = Value(stagingPath),
+       totalChunks = Value(totalChunks),
+       chunkSize = Value(chunkSize),
+       status = Value(status),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<FileTransferEntry> custom({
+    Expression<String>? transferId,
+    Expression<String>? conversationId,
+    Expression<String>? peerId,
+    Expression<String>? direction,
+    Expression<String>? fileName,
+    Expression<BigInt>? fileSize,
+    Expression<String>? mimeType,
+    Expression<String>? fileHash,
+    Expression<String>? localPath,
+    Expression<String>? stagingPath,
+    Expression<int>? totalChunks,
+    Expression<int>? chunkSize,
+    Expression<String>? status,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (transferId != null) 'transfer_id': transferId,
+      if (conversationId != null) 'conversation_id': conversationId,
+      if (peerId != null) 'peer_id': peerId,
+      if (direction != null) 'direction': direction,
+      if (fileName != null) 'file_name': fileName,
+      if (fileSize != null) 'file_size': fileSize,
+      if (mimeType != null) 'mime_type': mimeType,
+      if (fileHash != null) 'file_hash': fileHash,
+      if (localPath != null) 'local_path': localPath,
+      if (stagingPath != null) 'staging_path': stagingPath,
+      if (totalChunks != null) 'total_chunks': totalChunks,
+      if (chunkSize != null) 'chunk_size': chunkSize,
+      if (status != null) 'status': status,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  FileTransfersTableCompanion copyWith({
+    Value<String>? transferId,
+    Value<String>? conversationId,
+    Value<String>? peerId,
+    Value<String>? direction,
+    Value<String>? fileName,
+    Value<BigInt>? fileSize,
+    Value<String>? mimeType,
+    Value<String>? fileHash,
+    Value<String>? localPath,
+    Value<String>? stagingPath,
+    Value<int>? totalChunks,
+    Value<int>? chunkSize,
+    Value<String>? status,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return FileTransfersTableCompanion(
+      transferId: transferId ?? this.transferId,
+      conversationId: conversationId ?? this.conversationId,
+      peerId: peerId ?? this.peerId,
+      direction: direction ?? this.direction,
+      fileName: fileName ?? this.fileName,
+      fileSize: fileSize ?? this.fileSize,
+      mimeType: mimeType ?? this.mimeType,
+      fileHash: fileHash ?? this.fileHash,
+      localPath: localPath ?? this.localPath,
+      stagingPath: stagingPath ?? this.stagingPath,
+      totalChunks: totalChunks ?? this.totalChunks,
+      chunkSize: chunkSize ?? this.chunkSize,
+      status: status ?? this.status,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (transferId.present) {
+      map['transfer_id'] = Variable<String>(transferId.value);
+    }
+    if (conversationId.present) {
+      map['conversation_id'] = Variable<String>(conversationId.value);
+    }
+    if (peerId.present) {
+      map['peer_id'] = Variable<String>(peerId.value);
+    }
+    if (direction.present) {
+      map['direction'] = Variable<String>(direction.value);
+    }
+    if (fileName.present) {
+      map['file_name'] = Variable<String>(fileName.value);
+    }
+    if (fileSize.present) {
+      map['file_size'] = Variable<BigInt>(fileSize.value);
+    }
+    if (mimeType.present) {
+      map['mime_type'] = Variable<String>(mimeType.value);
+    }
+    if (fileHash.present) {
+      map['file_hash'] = Variable<String>(fileHash.value);
+    }
+    if (localPath.present) {
+      map['local_path'] = Variable<String>(localPath.value);
+    }
+    if (stagingPath.present) {
+      map['staging_path'] = Variable<String>(stagingPath.value);
+    }
+    if (totalChunks.present) {
+      map['total_chunks'] = Variable<int>(totalChunks.value);
+    }
+    if (chunkSize.present) {
+      map['chunk_size'] = Variable<int>(chunkSize.value);
+    }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('FileTransfersTableCompanion(')
+          ..write('transferId: $transferId, ')
+          ..write('conversationId: $conversationId, ')
+          ..write('peerId: $peerId, ')
+          ..write('direction: $direction, ')
+          ..write('fileName: $fileName, ')
+          ..write('fileSize: $fileSize, ')
+          ..write('mimeType: $mimeType, ')
+          ..write('fileHash: $fileHash, ')
+          ..write('localPath: $localPath, ')
+          ..write('stagingPath: $stagingPath, ')
+          ..write('totalChunks: $totalChunks, ')
+          ..write('chunkSize: $chunkSize, ')
+          ..write('status: $status, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $FileChunksTableTable extends FileChunksTable
+    with TableInfo<$FileChunksTableTable, FileChunkEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $FileChunksTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _transferIdMeta = const VerificationMeta(
+    'transferId',
+  );
+  @override
+  late final GeneratedColumn<String> transferId = GeneratedColumn<String>(
+    'transfer_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _chunkIndexMeta = const VerificationMeta(
+    'chunkIndex',
+  );
+  @override
+  late final GeneratedColumn<int> chunkIndex = GeneratedColumn<int>(
+    'chunk_index',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+    'status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _receivedAtMeta = const VerificationMeta(
+    'receivedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> receivedAt = GeneratedColumn<DateTime>(
+    'received_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    transferId,
+    chunkIndex,
+    status,
+    receivedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'file_chunks_table';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<FileChunkEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('transfer_id')) {
+      context.handle(
+        _transferIdMeta,
+        transferId.isAcceptableOrUnknown(data['transfer_id']!, _transferIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_transferIdMeta);
+    }
+    if (data.containsKey('chunk_index')) {
+      context.handle(
+        _chunkIndexMeta,
+        chunkIndex.isAcceptableOrUnknown(data['chunk_index']!, _chunkIndexMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_chunkIndexMeta);
+    }
+    if (data.containsKey('status')) {
+      context.handle(
+        _statusMeta,
+        status.isAcceptableOrUnknown(data['status']!, _statusMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_statusMeta);
+    }
+    if (data.containsKey('received_at')) {
+      context.handle(
+        _receivedAtMeta,
+        receivedAt.isAcceptableOrUnknown(data['received_at']!, _receivedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_receivedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {transferId, chunkIndex};
+  @override
+  FileChunkEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return FileChunkEntry(
+      transferId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}transfer_id'],
+      )!,
+      chunkIndex: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}chunk_index'],
+      )!,
+      status: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}status'],
+      )!,
+      receivedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}received_at'],
+      )!,
+    );
+  }
+
+  @override
+  $FileChunksTableTable createAlias(String alias) {
+    return $FileChunksTableTable(attachedDatabase, alias);
+  }
+}
+
+class FileChunkEntry extends DataClass implements Insertable<FileChunkEntry> {
+  /// Associated transfer ID.
+  final String transferId;
+
+  /// 0-based index of this chunk.
+  final int chunkIndex;
+
+  /// Chunk status (e.g. 'pending', 'received', 'verified').
+  final String status;
+
+  /// Local timestamp when chunk was received or recorded.
+  final DateTime receivedAt;
+  const FileChunkEntry({
+    required this.transferId,
+    required this.chunkIndex,
+    required this.status,
+    required this.receivedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['transfer_id'] = Variable<String>(transferId);
+    map['chunk_index'] = Variable<int>(chunkIndex);
+    map['status'] = Variable<String>(status);
+    map['received_at'] = Variable<DateTime>(receivedAt);
+    return map;
+  }
+
+  FileChunksTableCompanion toCompanion(bool nullToAbsent) {
+    return FileChunksTableCompanion(
+      transferId: Value(transferId),
+      chunkIndex: Value(chunkIndex),
+      status: Value(status),
+      receivedAt: Value(receivedAt),
+    );
+  }
+
+  factory FileChunkEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return FileChunkEntry(
+      transferId: serializer.fromJson<String>(json['transferId']),
+      chunkIndex: serializer.fromJson<int>(json['chunkIndex']),
+      status: serializer.fromJson<String>(json['status']),
+      receivedAt: serializer.fromJson<DateTime>(json['receivedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'transferId': serializer.toJson<String>(transferId),
+      'chunkIndex': serializer.toJson<int>(chunkIndex),
+      'status': serializer.toJson<String>(status),
+      'receivedAt': serializer.toJson<DateTime>(receivedAt),
+    };
+  }
+
+  FileChunkEntry copyWith({
+    String? transferId,
+    int? chunkIndex,
+    String? status,
+    DateTime? receivedAt,
+  }) => FileChunkEntry(
+    transferId: transferId ?? this.transferId,
+    chunkIndex: chunkIndex ?? this.chunkIndex,
+    status: status ?? this.status,
+    receivedAt: receivedAt ?? this.receivedAt,
+  );
+  FileChunkEntry copyWithCompanion(FileChunksTableCompanion data) {
+    return FileChunkEntry(
+      transferId: data.transferId.present
+          ? data.transferId.value
+          : this.transferId,
+      chunkIndex: data.chunkIndex.present
+          ? data.chunkIndex.value
+          : this.chunkIndex,
+      status: data.status.present ? data.status.value : this.status,
+      receivedAt: data.receivedAt.present
+          ? data.receivedAt.value
+          : this.receivedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('FileChunkEntry(')
+          ..write('transferId: $transferId, ')
+          ..write('chunkIndex: $chunkIndex, ')
+          ..write('status: $status, ')
+          ..write('receivedAt: $receivedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(transferId, chunkIndex, status, receivedAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is FileChunkEntry &&
+          other.transferId == this.transferId &&
+          other.chunkIndex == this.chunkIndex &&
+          other.status == this.status &&
+          other.receivedAt == this.receivedAt);
+}
+
+class FileChunksTableCompanion extends UpdateCompanion<FileChunkEntry> {
+  final Value<String> transferId;
+  final Value<int> chunkIndex;
+  final Value<String> status;
+  final Value<DateTime> receivedAt;
+  final Value<int> rowid;
+  const FileChunksTableCompanion({
+    this.transferId = const Value.absent(),
+    this.chunkIndex = const Value.absent(),
+    this.status = const Value.absent(),
+    this.receivedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  FileChunksTableCompanion.insert({
+    required String transferId,
+    required int chunkIndex,
+    required String status,
+    required DateTime receivedAt,
+    this.rowid = const Value.absent(),
+  }) : transferId = Value(transferId),
+       chunkIndex = Value(chunkIndex),
+       status = Value(status),
+       receivedAt = Value(receivedAt);
+  static Insertable<FileChunkEntry> custom({
+    Expression<String>? transferId,
+    Expression<int>? chunkIndex,
+    Expression<String>? status,
+    Expression<DateTime>? receivedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (transferId != null) 'transfer_id': transferId,
+      if (chunkIndex != null) 'chunk_index': chunkIndex,
+      if (status != null) 'status': status,
+      if (receivedAt != null) 'received_at': receivedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  FileChunksTableCompanion copyWith({
+    Value<String>? transferId,
+    Value<int>? chunkIndex,
+    Value<String>? status,
+    Value<DateTime>? receivedAt,
+    Value<int>? rowid,
+  }) {
+    return FileChunksTableCompanion(
+      transferId: transferId ?? this.transferId,
+      chunkIndex: chunkIndex ?? this.chunkIndex,
+      status: status ?? this.status,
+      receivedAt: receivedAt ?? this.receivedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (transferId.present) {
+      map['transfer_id'] = Variable<String>(transferId.value);
+    }
+    if (chunkIndex.present) {
+      map['chunk_index'] = Variable<int>(chunkIndex.value);
+    }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
+    if (receivedAt.present) {
+      map['received_at'] = Variable<DateTime>(receivedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('FileChunksTableCompanion(')
+          ..write('transferId: $transferId, ')
+          ..write('chunkIndex: $chunkIndex, ')
+          ..write('status: $status, ')
+          ..write('receivedAt: $receivedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -1394,6 +2621,11 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $PeerIdentitiesTableTable peerIdentitiesTable =
       $PeerIdentitiesTableTable(this);
   late final $SeenPacketsTableTable seenPacketsTable = $SeenPacketsTableTable(
+    this,
+  );
+  late final $FileTransfersTableTable fileTransfersTable =
+      $FileTransfersTableTable(this);
+  late final $FileChunksTableTable fileChunksTable = $FileChunksTableTable(
     this,
   );
   @override
@@ -1404,6 +2636,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     messagesTable,
     peerIdentitiesTable,
     seenPacketsTable,
+    fileTransfersTable,
+    fileChunksTable,
   ];
 }
 
@@ -2133,6 +3367,610 @@ typedef $$SeenPacketsTableTableProcessedTableManager =
       SeenPacketEntry,
       PrefetchHooks Function()
     >;
+typedef $$FileTransfersTableTableCreateCompanionBuilder =
+    FileTransfersTableCompanion Function({
+      required String transferId,
+      required String conversationId,
+      required String peerId,
+      required String direction,
+      required String fileName,
+      required BigInt fileSize,
+      required String mimeType,
+      required String fileHash,
+      required String localPath,
+      required String stagingPath,
+      required int totalChunks,
+      required int chunkSize,
+      required String status,
+      required DateTime createdAt,
+      required DateTime updatedAt,
+      Value<int> rowid,
+    });
+typedef $$FileTransfersTableTableUpdateCompanionBuilder =
+    FileTransfersTableCompanion Function({
+      Value<String> transferId,
+      Value<String> conversationId,
+      Value<String> peerId,
+      Value<String> direction,
+      Value<String> fileName,
+      Value<BigInt> fileSize,
+      Value<String> mimeType,
+      Value<String> fileHash,
+      Value<String> localPath,
+      Value<String> stagingPath,
+      Value<int> totalChunks,
+      Value<int> chunkSize,
+      Value<String> status,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+
+class $$FileTransfersTableTableFilterComposer
+    extends Composer<_$AppDatabase, $FileTransfersTableTable> {
+  $$FileTransfersTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get transferId => $composableBuilder(
+    column: $table.transferId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get peerId => $composableBuilder(
+    column: $table.peerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get direction => $composableBuilder(
+    column: $table.direction,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get fileName => $composableBuilder(
+    column: $table.fileName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<BigInt> get fileSize => $composableBuilder(
+    column: $table.fileSize,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mimeType => $composableBuilder(
+    column: $table.mimeType,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get fileHash => $composableBuilder(
+    column: $table.fileHash,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get localPath => $composableBuilder(
+    column: $table.localPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get stagingPath => $composableBuilder(
+    column: $table.stagingPath,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get totalChunks => $composableBuilder(
+    column: $table.totalChunks,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get chunkSize => $composableBuilder(
+    column: $table.chunkSize,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$FileTransfersTableTableOrderingComposer
+    extends Composer<_$AppDatabase, $FileTransfersTableTable> {
+  $$FileTransfersTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get transferId => $composableBuilder(
+    column: $table.transferId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get peerId => $composableBuilder(
+    column: $table.peerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get direction => $composableBuilder(
+    column: $table.direction,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get fileName => $composableBuilder(
+    column: $table.fileName,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<BigInt> get fileSize => $composableBuilder(
+    column: $table.fileSize,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get mimeType => $composableBuilder(
+    column: $table.mimeType,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get fileHash => $composableBuilder(
+    column: $table.fileHash,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get localPath => $composableBuilder(
+    column: $table.localPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get stagingPath => $composableBuilder(
+    column: $table.stagingPath,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get totalChunks => $composableBuilder(
+    column: $table.totalChunks,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get chunkSize => $composableBuilder(
+    column: $table.chunkSize,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$FileTransfersTableTableAnnotationComposer
+    extends Composer<_$AppDatabase, $FileTransfersTableTable> {
+  $$FileTransfersTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get transferId => $composableBuilder(
+    column: $table.transferId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get conversationId => $composableBuilder(
+    column: $table.conversationId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get peerId =>
+      $composableBuilder(column: $table.peerId, builder: (column) => column);
+
+  GeneratedColumn<String> get direction =>
+      $composableBuilder(column: $table.direction, builder: (column) => column);
+
+  GeneratedColumn<String> get fileName =>
+      $composableBuilder(column: $table.fileName, builder: (column) => column);
+
+  GeneratedColumn<BigInt> get fileSize =>
+      $composableBuilder(column: $table.fileSize, builder: (column) => column);
+
+  GeneratedColumn<String> get mimeType =>
+      $composableBuilder(column: $table.mimeType, builder: (column) => column);
+
+  GeneratedColumn<String> get fileHash =>
+      $composableBuilder(column: $table.fileHash, builder: (column) => column);
+
+  GeneratedColumn<String> get localPath =>
+      $composableBuilder(column: $table.localPath, builder: (column) => column);
+
+  GeneratedColumn<String> get stagingPath => $composableBuilder(
+    column: $table.stagingPath,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get totalChunks => $composableBuilder(
+    column: $table.totalChunks,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get chunkSize =>
+      $composableBuilder(column: $table.chunkSize, builder: (column) => column);
+
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$FileTransfersTableTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $FileTransfersTableTable,
+          FileTransferEntry,
+          $$FileTransfersTableTableFilterComposer,
+          $$FileTransfersTableTableOrderingComposer,
+          $$FileTransfersTableTableAnnotationComposer,
+          $$FileTransfersTableTableCreateCompanionBuilder,
+          $$FileTransfersTableTableUpdateCompanionBuilder,
+          (
+            FileTransferEntry,
+            BaseReferences<
+              _$AppDatabase,
+              $FileTransfersTableTable,
+              FileTransferEntry
+            >,
+          ),
+          FileTransferEntry,
+          PrefetchHooks Function()
+        > {
+  $$FileTransfersTableTableTableManager(
+    _$AppDatabase db,
+    $FileTransfersTableTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$FileTransfersTableTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$FileTransfersTableTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$FileTransfersTableTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> transferId = const Value.absent(),
+                Value<String> conversationId = const Value.absent(),
+                Value<String> peerId = const Value.absent(),
+                Value<String> direction = const Value.absent(),
+                Value<String> fileName = const Value.absent(),
+                Value<BigInt> fileSize = const Value.absent(),
+                Value<String> mimeType = const Value.absent(),
+                Value<String> fileHash = const Value.absent(),
+                Value<String> localPath = const Value.absent(),
+                Value<String> stagingPath = const Value.absent(),
+                Value<int> totalChunks = const Value.absent(),
+                Value<int> chunkSize = const Value.absent(),
+                Value<String> status = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => FileTransfersTableCompanion(
+                transferId: transferId,
+                conversationId: conversationId,
+                peerId: peerId,
+                direction: direction,
+                fileName: fileName,
+                fileSize: fileSize,
+                mimeType: mimeType,
+                fileHash: fileHash,
+                localPath: localPath,
+                stagingPath: stagingPath,
+                totalChunks: totalChunks,
+                chunkSize: chunkSize,
+                status: status,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String transferId,
+                required String conversationId,
+                required String peerId,
+                required String direction,
+                required String fileName,
+                required BigInt fileSize,
+                required String mimeType,
+                required String fileHash,
+                required String localPath,
+                required String stagingPath,
+                required int totalChunks,
+                required int chunkSize,
+                required String status,
+                required DateTime createdAt,
+                required DateTime updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => FileTransfersTableCompanion.insert(
+                transferId: transferId,
+                conversationId: conversationId,
+                peerId: peerId,
+                direction: direction,
+                fileName: fileName,
+                fileSize: fileSize,
+                mimeType: mimeType,
+                fileHash: fileHash,
+                localPath: localPath,
+                stagingPath: stagingPath,
+                totalChunks: totalChunks,
+                chunkSize: chunkSize,
+                status: status,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$FileTransfersTableTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $FileTransfersTableTable,
+      FileTransferEntry,
+      $$FileTransfersTableTableFilterComposer,
+      $$FileTransfersTableTableOrderingComposer,
+      $$FileTransfersTableTableAnnotationComposer,
+      $$FileTransfersTableTableCreateCompanionBuilder,
+      $$FileTransfersTableTableUpdateCompanionBuilder,
+      (
+        FileTransferEntry,
+        BaseReferences<
+          _$AppDatabase,
+          $FileTransfersTableTable,
+          FileTransferEntry
+        >,
+      ),
+      FileTransferEntry,
+      PrefetchHooks Function()
+    >;
+typedef $$FileChunksTableTableCreateCompanionBuilder =
+    FileChunksTableCompanion Function({
+      required String transferId,
+      required int chunkIndex,
+      required String status,
+      required DateTime receivedAt,
+      Value<int> rowid,
+    });
+typedef $$FileChunksTableTableUpdateCompanionBuilder =
+    FileChunksTableCompanion Function({
+      Value<String> transferId,
+      Value<int> chunkIndex,
+      Value<String> status,
+      Value<DateTime> receivedAt,
+      Value<int> rowid,
+    });
+
+class $$FileChunksTableTableFilterComposer
+    extends Composer<_$AppDatabase, $FileChunksTableTable> {
+  $$FileChunksTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get transferId => $composableBuilder(
+    column: $table.transferId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get chunkIndex => $composableBuilder(
+    column: $table.chunkIndex,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get receivedAt => $composableBuilder(
+    column: $table.receivedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$FileChunksTableTableOrderingComposer
+    extends Composer<_$AppDatabase, $FileChunksTableTable> {
+  $$FileChunksTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get transferId => $composableBuilder(
+    column: $table.transferId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get chunkIndex => $composableBuilder(
+    column: $table.chunkIndex,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get receivedAt => $composableBuilder(
+    column: $table.receivedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$FileChunksTableTableAnnotationComposer
+    extends Composer<_$AppDatabase, $FileChunksTableTable> {
+  $$FileChunksTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get transferId => $composableBuilder(
+    column: $table.transferId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get chunkIndex => $composableBuilder(
+    column: $table.chunkIndex,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get receivedAt => $composableBuilder(
+    column: $table.receivedAt,
+    builder: (column) => column,
+  );
+}
+
+class $$FileChunksTableTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $FileChunksTableTable,
+          FileChunkEntry,
+          $$FileChunksTableTableFilterComposer,
+          $$FileChunksTableTableOrderingComposer,
+          $$FileChunksTableTableAnnotationComposer,
+          $$FileChunksTableTableCreateCompanionBuilder,
+          $$FileChunksTableTableUpdateCompanionBuilder,
+          (
+            FileChunkEntry,
+            BaseReferences<
+              _$AppDatabase,
+              $FileChunksTableTable,
+              FileChunkEntry
+            >,
+          ),
+          FileChunkEntry,
+          PrefetchHooks Function()
+        > {
+  $$FileChunksTableTableTableManager(
+    _$AppDatabase db,
+    $FileChunksTableTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$FileChunksTableTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$FileChunksTableTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$FileChunksTableTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> transferId = const Value.absent(),
+                Value<int> chunkIndex = const Value.absent(),
+                Value<String> status = const Value.absent(),
+                Value<DateTime> receivedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => FileChunksTableCompanion(
+                transferId: transferId,
+                chunkIndex: chunkIndex,
+                status: status,
+                receivedAt: receivedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String transferId,
+                required int chunkIndex,
+                required String status,
+                required DateTime receivedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => FileChunksTableCompanion.insert(
+                transferId: transferId,
+                chunkIndex: chunkIndex,
+                status: status,
+                receivedAt: receivedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$FileChunksTableTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $FileChunksTableTable,
+      FileChunkEntry,
+      $$FileChunksTableTableFilterComposer,
+      $$FileChunksTableTableOrderingComposer,
+      $$FileChunksTableTableAnnotationComposer,
+      $$FileChunksTableTableCreateCompanionBuilder,
+      $$FileChunksTableTableUpdateCompanionBuilder,
+      (
+        FileChunkEntry,
+        BaseReferences<_$AppDatabase, $FileChunksTableTable, FileChunkEntry>,
+      ),
+      FileChunkEntry,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -2143,4 +3981,8 @@ class $AppDatabaseManager {
       $$PeerIdentitiesTableTableTableManager(_db, _db.peerIdentitiesTable);
   $$SeenPacketsTableTableTableManager get seenPacketsTable =>
       $$SeenPacketsTableTableTableManager(_db, _db.seenPacketsTable);
+  $$FileTransfersTableTableTableManager get fileTransfersTable =>
+      $$FileTransfersTableTableTableManager(_db, _db.fileTransfersTable);
+  $$FileChunksTableTableTableManager get fileChunksTable =>
+      $$FileChunksTableTableTableManager(_db, _db.fileChunksTable);
 }
