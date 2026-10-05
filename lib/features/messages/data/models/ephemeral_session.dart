@@ -213,6 +213,7 @@ class EphemeralSession {
     _state = SessionLifecycleState.noSession;
     _directionalKeys?.destroy();
     _directionalKeys = null;
+    sharedSecret.fillRange(0, sharedSecret.length, 0);
   }
 
   /// Verifies that this session matches the given binding parameters.

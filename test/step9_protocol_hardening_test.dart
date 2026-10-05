@@ -792,7 +792,7 @@ void main() {
       );
 
       // Expired request verification
-      final expiredNow = testNow.add(const Duration(minutes: 15));
+      final expiredNow = DateTime.fromMillisecondsSinceEpoch(resp.timestamp).add(const Duration(minutes: 15));
       expect(
         () => handshakeA.verifyKeyResponse(resp, now: expiredNow),
         throwsA(isA<HandshakeException>().having(
