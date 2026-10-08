@@ -7,10 +7,9 @@ void main() {
     final file = File('${tempDir.path}/test.bin');
     await file.writeAsBytes([1, 2, 3, 4, 5, 6, 7, 8]);
 
-    // Let's check FileMode constructors or subclasses or private fields
-    print('FileMode: ${FileMode}');
+    // Verify FileMode availability
+    expect(FileMode.read, isNotNull);
 
-    // Let's test if there is any other way in dart:io
     await tempDir.delete(recursive: true);
   });
 }
