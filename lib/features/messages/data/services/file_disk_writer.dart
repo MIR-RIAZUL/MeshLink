@@ -174,21 +174,46 @@ class FileDiskWriter {
       await parentDir.create(recursive: true);
     }
 
-    // 5. Open RandomAccessFile (using FileMode.append to avoid accidental truncation of resumes)
+    // 5. Open RandomAccessFile with true random-access semantics.
+    //
+    // Design semantics:
+    // - New transfer or reset: If the staging file does not exist, or if reset is requested,
+    //   we open using [FileMode.write]. This creates the file with true random-access
+    //   read/write permissions without append semantics. If reset is true and the file exists,
+    //   we explicitly delete it first to ensure an intentional clean slate.
+    // - Existing transfer (resume): If the staging file already exists and reset is false,
+    //   opening with [FileMode.write] would destructively truncate the file to 0 bytes.
+    //   In Dart's standard dart:io library, [FileMode.append] is the non-truncating
+    //   write-capable mode. Because Dart's C++ runtime only seeks to SEEK_END at initial open
+    //   without setting OS-level O_APPEND, resetting position to 0 and issuing explicit
+    //   setPosition() before every chunk write provides safe, non-destructive random-access.
     RandomAccessFile? raf;
     try {
-      raf = await targetFile.open(mode: FileMode.append);
-      _activeHandleCount++;
+      final fileExists = await targetFile.exists();
 
       if (reset) {
-        await raf.truncate(0);
-      }
-
-      final currentLength = await raf.length();
-      if (currentLength < expectedFileSize) {
+        if (fileExists) {
+          await targetFile.delete();
+        }
+        raf = await targetFile.open(mode: FileMode.write);
+        _activeHandleCount++;
         await raf.truncate(expectedFileSize);
-      } else if (currentLength > expectedFileSize) {
+        await raf.setPosition(0);
+      } else if (!fileExists) {
+        // New transfer: open with FileMode.write for true random-access semantics
+        raf = await targetFile.open(mode: FileMode.write);
+        _activeHandleCount++;
         await raf.truncate(expectedFileSize);
+        await raf.setPosition(0);
+      } else {
+        // Existing transfer (resume): open non-destructively without truncation
+        raf = await targetFile.open(mode: FileMode.append);
+        _activeHandleCount++;
+        final currentLength = await raf.length();
+        if (currentLength != expectedFileSize) {
+          await raf.truncate(expectedFileSize);
+        }
+        await raf.setPosition(0);
       }
 
       _transferId = transferId;

@@ -695,4 +695,151 @@ void main() {
       await stagingFile.delete();
     });
   });
+
+  group('Phase 8 Step 7 — Strict Random-Access & File Opening Semantics Verification', () {
+    test('36. Write chunk C, then A, then B out-of-order and verify exact concatenated content', () async {
+      final writer = FileDiskWriter(filePathService: filePathService);
+      const transferId = 'FT-ORDER-36';
+      const chunkSize = 256;
+      const totalSize = 3 * chunkSize;
+
+      final chunkA = generateBytes(chunkSize, seed: 101);
+      final chunkB = generateBytes(chunkSize, seed: 102);
+      final chunkC = generateBytes(chunkSize, seed: 103);
+
+      await writer.createOrOpen(transferId: transferId, expectedFileSize: totalSize);
+
+      // Intentionally call in order: C (offset 2 * chunkSize), A (offset 0), B (offset 1 * chunkSize)
+      await writer.writeAt(offset: 2 * chunkSize, data: chunkC);
+      await writer.writeAt(offset: 0, data: chunkA);
+      await writer.writeAt(offset: chunkSize, data: chunkB);
+      await writer.close();
+
+      final fileBytes = await File(await filePathService.getStagingPath(transferId)).readAsBytes();
+      expect(fileBytes.length, totalSize);
+      expect(fileBytes.sublist(0, chunkSize), chunkA);
+      expect(fileBytes.sublist(chunkSize, 2 * chunkSize), chunkB);
+      expect(fileBytes.sublist(2 * chunkSize, 3 * chunkSize), chunkC);
+    });
+
+    test('37. Append-semantics regression test verifying exact byte layout and no EOF forcing', () async {
+      final writer = FileDiskWriter(filePathService: filePathService);
+      const transferId = 'FT-APPEND-REG-37';
+      const expectedSize = 12;
+
+      // Expected byte layout: AAAABBBBCCCC (12 bytes)
+      final aBytes = Uint8List.fromList([0x41, 0x41, 0x41, 0x41]); // "AAAA"
+      final bBytes = Uint8List.fromList([0x42, 0x42, 0x42, 0x42]); // "BBBB"
+      final cBytes = Uint8List.fromList([0x43, 0x43, 0x43, 0x43]); // "CCCC"
+
+      await writer.createOrOpen(transferId: transferId, expectedFileSize: expectedSize);
+
+      // Write sequence: offset 0 (A), offset 8 (C), offset 4 (B)
+      await writer.writeAt(offset: 0, data: aBytes);
+      await writer.writeAt(offset: 8, data: cBytes);
+      await writer.writeAt(offset: 4, data: bBytes);
+      await writer.flush();
+      await writer.close();
+
+      final actualBytes = await File(await filePathService.getStagingPath(transferId)).readAsBytes();
+      expect(actualBytes.length, expectedSize);
+      // If append semantics were accidentally active, the file would either grow beyond 12 or
+      // have the order "AAAACCCCBBBB".
+      expect(actualBytes, Uint8List.fromList([
+        0x41, 0x41, 0x41, 0x41, // offset 0..4: AAAA
+        0x42, 0x42, 0x42, 0x42, // offset 4..8: BBBB
+        0x43, 0x43, 0x43, 0x43, // offset 8..12: CCCC
+      ]));
+    });
+
+    test('38. Existing staging file preservation: modify single region, preserve all others', () async {
+      const transferId = 'FT-PRESERVE-38';
+      final stagingPath = await filePathService.getStagingPath(transferId);
+
+      // 0000: AAAA (0x41 * 4)
+      // 0004: BBBB (0x42 * 4)
+      // 0008: CCCC (0x43 * 4)
+      // 0012: DDDD (0x44 * 4)
+      final initialStaging = Uint8List.fromList([
+        0x41, 0x41, 0x41, 0x41,
+        0x42, 0x42, 0x42, 0x42,
+        0x43, 0x43, 0x43, 0x43,
+        0x44, 0x44, 0x44, 0x44,
+      ]);
+      await File(stagingPath).writeAsBytes(initialStaging, flush: true);
+
+      final writer = FileDiskWriter(filePathService: filePathService);
+      await writer.open(transferId: transferId, expectedFileSize: 16);
+
+      // Perform: writeAt(offset: 4, data: XXXX [0x58 * 4])
+      final xBytes = Uint8List.fromList([0x58, 0x58, 0x58, 0x58]);
+      await writer.writeAt(offset: 4, data: xBytes);
+      await writer.close();
+
+      final finalBytes = await File(stagingPath).readAsBytes();
+      expect(finalBytes, Uint8List.fromList([
+        0x41, 0x41, 0x41, 0x41, // 0000: AAAA preserved
+        0x58, 0x58, 0x58, 0x58, // 0004: XXXX updated
+        0x43, 0x43, 0x43, 0x43, // 0008: CCCC preserved
+        0x44, 0x44, 0x44, 0x44, // 0012: DDDD preserved
+      ]));
+    });
+
+    test('39. Reset true intentionally clears previous staging contents before new writes', () async {
+      const transferId = 'FT-RESET-39';
+      final stagingPath = await filePathService.getStagingPath(transferId);
+
+      // Create staging file with 200 bytes of old data
+      final oldData = generateBytes(200, seed: 999);
+      await File(stagingPath).writeAsBytes(oldData, flush: true);
+
+      final writer = FileDiskWriter(filePathService: filePathService);
+      // Open with reset: true and expected size 100
+      await writer.open(
+        transferId: transferId,
+        expectedFileSize: 100,
+        reset: true,
+      );
+
+      // Write new chunks at offsets 50 and 0
+      final newPart1 = generateBytes(40, seed: 11);
+      final newPart2 = generateBytes(40, seed: 22);
+
+      await writer.writeAt(offset: 50, data: newPart2);
+      await writer.writeAt(offset: 0, data: newPart1);
+      await writer.close();
+
+      final result = await File(stagingPath).readAsBytes();
+      expect(result.length, 100);
+      expect(result.sublist(0, 40), newPart1);
+      expect(result.sublist(50, 90), newPart2);
+      // The unwritten region [40..50) and [90..100) must be 0x00, not old data
+      expect(result.sublist(40, 50), Uint8List(10));
+      expect(result.sublist(90, 100), Uint8List(10));
+    });
+
+    test('40. New transfer creates empty staging file and writes out-of-order cleanly', () async {
+      final writer = FileDiskWriter(filePathService: filePathService);
+      const transferId = 'FT-NEW-40';
+      const size = 64;
+
+      await writer.createOrOpen(transferId: transferId, expectedFileSize: size);
+      expect(writer.isOpen, isTrue);
+
+      // Out of order: offset 32 then offset 0
+      final partB = generateBytes(16, seed: 2);
+      final partA = generateBytes(16, seed: 1);
+
+      await writer.writeAt(offset: 32, data: partB);
+      await writer.writeAt(offset: 0, data: partA);
+      await writer.close();
+
+      final result = await File(await filePathService.getStagingPath(transferId)).readAsBytes();
+      expect(result.length, size);
+      expect(result.sublist(0, 16), partA);
+      expect(result.sublist(16, 32), Uint8List(16)); // unwritten gap is 0
+      expect(result.sublist(32, 48), partB);
+      expect(result.sublist(48, 64), Uint8List(16)); // unwritten tail is 0
+    });
+  });
 }
