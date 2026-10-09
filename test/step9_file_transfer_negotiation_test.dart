@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -1686,6 +1688,659 @@ void main() {
         authenticatedSenderId: 'ML-DEVICE-BOB',
       );
       expect(handled.status, FileTransferStatus.acceptReceived);
+    });
+  });
+
+  group('Group 7: Targeted Security Audit Regressions (Check 1, 2, 3)', () {
+    // --- Check 1: Peer Trust Regressions ---
+    test('Check 1.1: Missing peer identity under default TOFU policy is permitted', () async {
+      final offer = FileTransferOffer(
+        transferId: 'TF-TOFU-MISSING',
+        offerId: 'OFF-TOFU-MISSING',
+        senderId: 'ML-DEVICE-ALICE',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'tofu_test.txt',
+        fileSize: 1024,
+        totalChunks: 1,
+        createdAt: mockNow,
+        expiresAt: mockNow.add(const Duration(minutes: 5)),
+      );
+
+      final transfer = await bobService.receiveOffer(
+        offer: offer,
+        authenticatedSenderId: 'ML-DEVICE-ALICE',
+      );
+      expect(transfer.status, FileTransferStatus.offerReceived);
+
+      final decision = await bobService.acceptOffer(
+        transferId: 'TF-TOFU-MISSING',
+        offerId: 'OFF-TOFU-MISSING',
+      );
+      expect(decision.decisionType, FileTransferDecisionType.accept);
+    });
+
+    test('Check 1.2: Missing peer identity under strict policy is rejected with PeerUntrustedException', () async {
+      final strictBobService = FileTransferNegotiationService(
+        database: bobDb,
+        localDeviceId: 'ML-DEVICE-BOB',
+        messageRepository: bobRepo,
+        encryptionService: encryptionService,
+        clock: () => mockNow,
+        requireVerifiedPeer: true,
+      );
+
+      final offer = FileTransferOffer(
+        transferId: 'TF-STRICT-MISSING',
+        offerId: 'OFF-STRICT-MISSING',
+        senderId: 'ML-DEVICE-ALICE',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'strict_missing.txt',
+        fileSize: 1024,
+        totalChunks: 1,
+        createdAt: mockNow,
+        expiresAt: mockNow.add(const Duration(minutes: 5)),
+      );
+
+      expect(
+        () => strictBobService.receiveOffer(
+          offer: offer,
+          authenticatedSenderId: 'ML-DEVICE-ALICE',
+        ),
+        throwsA(isA<PeerUntrustedException>().having(
+          (e) => e.message,
+          'message',
+          contains('verified identity required'),
+        )),
+      );
+    });
+
+    test('Check 1.3: tofu_unverified peer under default TOFU policy is permitted', () async {
+      await bobRepo.savePeerIdentity(
+        PeerIdentityEntry(
+          peerId: 'ML-DEVICE-ALICE',
+          identityPublicKey: 'alice-pk-hex',
+          safetyNumber: '111222',
+          trustStatus: 'tofu_unverified',
+          protocolVersion: 2,
+          firstSeenAt: mockNow,
+          lastSeenAt: mockNow,
+        ),
+      );
+
+      final offer = FileTransferOffer(
+        transferId: 'TF-TOFU-UNVERIFIED',
+        offerId: 'OFF-TOFU-UNVERIFIED',
+        senderId: 'ML-DEVICE-ALICE',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'unverified.txt',
+        fileSize: 1024,
+        totalChunks: 1,
+        createdAt: mockNow,
+        expiresAt: mockNow.add(const Duration(minutes: 5)),
+      );
+
+      final transfer = await bobService.receiveOffer(
+        offer: offer,
+        authenticatedSenderId: 'ML-DEVICE-ALICE',
+      );
+      expect(transfer.status, FileTransferStatus.offerReceived);
+    });
+
+    test('Check 1.4: tofu_unverified peer under strict policy is rejected with PeerUntrustedException', () async {
+      final strictBobService = FileTransferNegotiationService(
+        database: bobDb,
+        localDeviceId: 'ML-DEVICE-BOB',
+        messageRepository: bobRepo,
+        encryptionService: encryptionService,
+        clock: () => mockNow,
+        requireVerifiedPeer: true,
+      );
+
+      await bobRepo.savePeerIdentity(
+        PeerIdentityEntry(
+          peerId: 'ML-DEVICE-ALICE',
+          identityPublicKey: 'alice-pk-hex',
+          safetyNumber: '111222',
+          trustStatus: 'tofu_unverified',
+          protocolVersion: 2,
+          firstSeenAt: mockNow,
+          lastSeenAt: mockNow,
+        ),
+      );
+
+      final offer = FileTransferOffer(
+        transferId: 'TF-STRICT-UNVERIFIED',
+        offerId: 'OFF-STRICT-UNVERIFIED',
+        senderId: 'ML-DEVICE-ALICE',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'strict_unverified.txt',
+        fileSize: 1024,
+        totalChunks: 1,
+        createdAt: mockNow,
+        expiresAt: mockNow.add(const Duration(minutes: 5)),
+      );
+
+      expect(
+        () => strictBobService.receiveOffer(
+          offer: offer,
+          authenticatedSenderId: 'ML-DEVICE-ALICE',
+        ),
+        throwsA(isA<PeerUntrustedException>().having(
+          (e) => e.message,
+          'message',
+          contains('verified identity required'),
+        )),
+      );
+    });
+
+    test('Check 1.5: verified peer is accepted under both default and strict policies', () async {
+      final strictBobService = FileTransferNegotiationService(
+        database: bobDb,
+        localDeviceId: 'ML-DEVICE-BOB',
+        messageRepository: bobRepo,
+        encryptionService: encryptionService,
+        clock: () => mockNow,
+        requireVerifiedPeer: true,
+      );
+
+      await bobRepo.savePeerIdentity(
+        PeerIdentityEntry(
+          peerId: 'ML-DEVICE-ALICE',
+          identityPublicKey: 'alice-pk-hex',
+          safetyNumber: '111222',
+          trustStatus: 'verified',
+          protocolVersion: 2,
+          firstSeenAt: mockNow,
+          lastSeenAt: mockNow,
+        ),
+      );
+
+      final offer = FileTransferOffer(
+        transferId: 'TF-STRICT-VERIFIED',
+        offerId: 'OFF-STRICT-VERIFIED',
+        senderId: 'ML-DEVICE-ALICE',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'verified.txt',
+        fileSize: 1024,
+        totalChunks: 1,
+        createdAt: mockNow,
+        expiresAt: mockNow.add(const Duration(minutes: 5)),
+      );
+
+      final transfer = await strictBobService.receiveOffer(
+        offer: offer,
+        authenticatedSenderId: 'ML-DEVICE-ALICE',
+      );
+      expect(transfer.status, FileTransferStatus.offerReceived);
+
+      final decision = await strictBobService.acceptOffer(
+        transferId: 'TF-STRICT-VERIFIED',
+        offerId: 'OFF-STRICT-VERIFIED',
+      );
+      expect(decision.isAccepted, isTrue);
+    });
+
+    test('Check 1.6: compromised peer is rejected across createOffer, receiveOffer, acceptOffer, and handleDecision', () async {
+      await bobRepo.savePeerIdentity(
+        PeerIdentityEntry(
+          peerId: 'ML-DEVICE-ALICE',
+          identityPublicKey: 'alice-pk-hex',
+          safetyNumber: '111222',
+          trustStatus: 'compromised',
+          protocolVersion: 2,
+          firstSeenAt: mockNow,
+          lastSeenAt: mockNow,
+        ),
+      );
+      await aliceRepo.savePeerIdentity(
+        PeerIdentityEntry(
+          peerId: 'ML-DEVICE-BOB',
+          identityPublicKey: 'bob-pk-hex',
+          safetyNumber: '222333',
+          trustStatus: 'compromised',
+          protocolVersion: 2,
+          firstSeenAt: mockNow,
+          lastSeenAt: mockNow,
+        ),
+      );
+
+      // 1. createOffer to compromised peer
+      expect(
+        () => aliceService.createOffer(
+          transferId: 'TF-COMP-CREATE',
+          recipientId: 'ML-DEVICE-BOB',
+          fileName: 'test.pdf',
+          fileSize: 100,
+        ),
+        throwsA(isA<PeerUntrustedException>().having(
+          (e) => e.message,
+          'message',
+          contains('is marked as compromised'),
+        )),
+      );
+
+      // 2. receiveOffer from compromised peer
+      final offer = FileTransferOffer(
+        transferId: 'TF-COMP-RECEIVE',
+        offerId: 'OFF-COMP-RECEIVE',
+        senderId: 'ML-DEVICE-ALICE',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'test.pdf',
+        fileSize: 100,
+        totalChunks: 1,
+        createdAt: mockNow,
+        expiresAt: mockNow.add(const Duration(minutes: 5)),
+      );
+      expect(
+        () => bobService.receiveOffer(
+          offer: offer,
+          authenticatedSenderId: 'ML-DEVICE-ALICE',
+        ),
+        throwsA(isA<PeerUntrustedException>()),
+      );
+
+      // 3. acceptOffer when peer became compromised
+      await bobRepo.updateTrustStatus('ML-DEVICE-ALICE', 'tofu_unverified');
+      await bobService.receiveOffer(
+        offer: offer,
+        authenticatedSenderId: 'ML-DEVICE-ALICE',
+      );
+      await bobRepo.updateTrustStatus('ML-DEVICE-ALICE', 'compromised');
+      expect(
+        () => bobService.acceptOffer(
+          transferId: 'TF-COMP-RECEIVE',
+          offerId: 'OFF-COMP-RECEIVE',
+        ),
+        throwsA(isA<PeerUntrustedException>()),
+      );
+
+      // 4. handleDecision from compromised peer
+      final decision = FileTransferDecision(
+        transferId: 'TF-COMP-RECEIVE',
+        offerId: 'OFF-COMP-RECEIVE',
+        decisionType: FileTransferDecisionType.accept,
+        senderId: 'ML-DEVICE-BOB',
+        recipientId: 'ML-DEVICE-ALICE',
+        createdAt: mockNow,
+      );
+      expect(
+        () => aliceService.handleDecision(
+          decision: decision,
+          authenticatedSenderId: 'ML-DEVICE-BOB',
+        ),
+        throwsA(isA<PeerUntrustedException>()),
+      );
+    });
+
+    test('Check 1.7: changed identity key in session vs stored repository record throws PeerUntrustedException', () async {
+      final sessions = await establishTestSession();
+      final sessionB = sessions.sessionB;
+
+      // Bob saves Alice identity in repository with a DIFFERENT public key
+      final differentKey = Uint8List(32)..fillRange(0, 32, 0x42);
+      final differentBase64 = base64UrlEncode(differentKey);
+      await bobRepo.savePeerIdentity(
+        PeerIdentityEntry(
+          peerId: 'ML-DEVICE-ALICE',
+          identityPublicKey: differentBase64,
+          safetyNumber: '999999',
+          trustStatus: 'verified',
+          protocolVersion: 2,
+          firstSeenAt: mockNow,
+          lastSeenAt: mockNow,
+        ),
+      );
+
+      final offer = FileTransferOffer(
+        transferId: 'TF-KEY-MISMATCH',
+        offerId: 'OFF-KEY-MISMATCH',
+        senderId: 'ML-DEVICE-ALICE',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'changed_key.pdf',
+        fileSize: 1000,
+        totalChunks: 1,
+        createdAt: mockNow,
+        expiresAt: mockNow.add(const Duration(minutes: 5)),
+      );
+
+      final enc = await aliceService.encryptOffer(
+        session: sessions.sessionA,
+        offer: offer,
+      );
+      final aad = FileTransferNegotiationService.buildOfferAad(
+        sessionId: sessionB.sessionId,
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        transferId: 'TF-KEY-MISMATCH',
+      );
+
+      expect(
+        () => bobService.receiveEncryptedOffer(
+          session: sessionB,
+          encrypted: enc,
+          aad: aad,
+          authenticatedSenderId: 'ML-DEVICE-ALICE',
+        ),
+        throwsA(isA<PeerUntrustedException>().having(
+          (e) => e.message,
+          'message',
+          contains('identity key mismatch against stored identity record'),
+        )),
+      );
+    });
+
+    test('Check 1.8: session peerId mismatch against authenticated sender throws PeerUntrustedException', () async {
+      final sessions = await establishTestSession();
+      final sessionB = sessions.sessionB; // session with Alice
+
+      final enc = SessionEncryptedPayload(
+        nonce: Uint8List(12),
+        ciphertext: Uint8List(10),
+        mac: Uint8List(16),
+      );
+      final aad = Uint8List(10);
+
+      // Attempt to claim authenticatedSenderId is Charlie using session with Alice
+      expect(
+        () => bobService.receiveEncryptedOffer(
+          session: sessionB,
+          encrypted: enc,
+          aad: aad,
+          authenticatedSenderId: 'ML-DEVICE-CHARLIE',
+        ),
+        throwsA(isA<PeerUntrustedException>().having(
+          (e) => e.message,
+          'message',
+          contains('Session peer ID (ML-DEVICE-ALICE) does not match authenticated sender (ML-DEVICE-CHARLIE)'),
+        )),
+      );
+    });
+
+    // --- Check 2: Negotiation Encryption & AAD Regressions ---
+    test('Check 2.1: Cross-transfer substitution fails closed with zero plaintext leakage', () async {
+      final sessions = await establishTestSession();
+      final offer1 = await aliceService.createOffer(
+        transferId: 'TF-SUBST-001',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'file1.pdf',
+        fileSize: 2000,
+      );
+
+      final enc1 = await aliceService.encryptOffer(
+        session: sessions.sessionA,
+        offer: offer1,
+      );
+
+      final aadTransfer2 = FileTransferNegotiationService.buildOfferAad(
+        sessionId: sessions.sessionB.sessionId,
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        transferId: 'TF-SUBST-002', // Mismatched!
+      );
+
+      expect(
+        () => bobService.decryptOffer(
+          session: sessions.sessionB,
+          encrypted: enc1,
+          aad: aadTransfer2,
+        ),
+        throwsA(isA<DirectionalEncryptionException>()),
+      );
+    });
+
+    test('Check 2.2: Cross-direction substitution fails: sender cannot decrypt its own outgoing offer', () async {
+      final sessions = await establishTestSession();
+      final offer = await aliceService.createOffer(
+        transferId: 'TF-DIR-SUBST',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'reflection.pdf',
+        fileSize: 2000,
+      );
+
+      final enc = await aliceService.encryptOffer(
+        session: sessions.sessionA,
+        offer: offer,
+      );
+
+      final aad = FileTransferNegotiationService.buildOfferAad(
+        sessionId: sessions.sessionA.sessionId,
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        transferId: 'TF-DIR-SUBST',
+      );
+
+      expect(
+        () => aliceService.decryptOffer(
+          session: sessions.sessionA,
+          encrypted: enc,
+          aad: aad,
+        ),
+        throwsA(isA<DirectionalEncryptionException>()),
+      );
+    });
+
+    test('Check 2.3: Cross-type substitution fails: offer ciphertext cannot be decrypted as decision', () async {
+      final sessions = await establishTestSession();
+      final offer = await aliceService.createOffer(
+        transferId: 'TF-TYPE-SUBST',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'type_subst.pdf',
+        fileSize: 2000,
+      );
+
+      final encOffer = await aliceService.encryptOffer(
+        session: sessions.sessionA,
+        offer: offer,
+      );
+
+      final decisionAad = FileTransferNegotiationService.buildDecisionAad(
+        sessionId: sessions.sessionB.sessionId,
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        transferId: 'TF-TYPE-SUBST',
+      );
+
+      expect(
+        () => bobService.decryptDecision(
+          session: sessions.sessionB,
+          encrypted: encOffer,
+          aad: decisionAad,
+        ),
+        throwsA(isA<DirectionalEncryptionException>()),
+      );
+    });
+
+    test('Check 2.4: Session mismatch in encryptOffer throws FileTransferNegotiationException', () async {
+      final sessions = await establishTestSession();
+      final offerToCharlie = FileTransferOffer(
+        transferId: 'TF-CHARLIE-OFFER',
+        offerId: 'OFF-CHARLIE',
+        senderId: 'ML-DEVICE-ALICE',
+        recipientId: 'ML-DEVICE-CHARLIE',
+        fileName: 'doc.txt',
+        fileSize: 100,
+        totalChunks: 1,
+        createdAt: mockNow,
+        expiresAt: mockNow.add(const Duration(minutes: 5)),
+      );
+
+      expect(
+        () => aliceService.encryptOffer(
+          session: sessions.sessionA,
+          offer: offerToCharlie,
+        ),
+        throwsA(isA<FileTransferNegotiationException>().having(
+          (e) => e.message,
+          'message',
+          contains('Session peer ID (ML-DEVICE-BOB) does not match offer recipient (ML-DEVICE-CHARLIE)'),
+        )),
+      );
+    });
+
+    // --- Check 3: Persistence and Concurrency Regressions ---
+    test('Check 3.1: Incoming offer is persisted in SQLite fileTransfersTable and reloaded from DB', () async {
+      final offer = FileTransferOffer(
+        transferId: 'TF-SQLITE-PERSIST',
+        offerId: 'OFF-SQLITE',
+        senderId: 'ML-DEVICE-ALICE',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'persisted.txt',
+        fileSize: 4096,
+        chunkSize: 2048,
+        totalChunks: 2,
+        createdAt: mockNow,
+        expiresAt: mockNow.add(const Duration(minutes: 5)),
+      );
+
+      await bobService.receiveOffer(
+        offer: offer,
+        authenticatedSenderId: 'ML-DEVICE-ALICE',
+      );
+
+      final row = await bobDb.getFileTransfer('TF-SQLITE-PERSIST');
+      expect(row, isNotNull);
+      expect(row!.transferId, 'TF-SQLITE-PERSIST');
+      expect(row.fileName, 'persisted.txt');
+      expect(row.fileSize, BigInt.from(4096));
+      expect(row.chunkSize, 2048);
+      expect(row.totalChunks, 2);
+      expect(row.status, FileTransferStatus.offerReceived.toDbValue());
+      expect(row.direction, FileTransferDirection.incoming.toDbValue());
+    });
+
+    test('Check 3.2: Duplicate offer remains deduplicated after service recreation on same database', () async {
+      final offer = FileTransferOffer(
+        transferId: 'TF-SERVICE-RECREATE',
+        offerId: 'OFF-RECREATE',
+        senderId: 'ML-DEVICE-ALICE',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'recreate.txt',
+        fileSize: 2048,
+        totalChunks: 1,
+        createdAt: mockNow,
+        expiresAt: mockNow.add(const Duration(minutes: 5)),
+      );
+
+      await bobService.receiveOffer(
+        offer: offer,
+        authenticatedSenderId: 'ML-DEVICE-ALICE',
+      );
+
+      final freshBobService = FileTransferNegotiationService(
+        database: bobDb,
+        localDeviceId: 'ML-DEVICE-BOB',
+        messageRepository: bobRepo,
+        encryptionService: encryptionService,
+        clock: () => mockNow,
+      );
+
+      final deduplicated = await freshBobService.receiveOffer(
+        offer: offer,
+        authenticatedSenderId: 'ML-DEVICE-ALICE',
+      );
+      expect(deduplicated.transferId, 'TF-SERVICE-RECREATE');
+      expect(deduplicated.status, FileTransferStatus.offerReceived);
+
+      final transfers = await bobDb.getFileTransfersForPeer('ML-DEVICE-ALICE');
+      final matching = transfers.where((t) => t.transferId == 'TF-SERVICE-RECREATE').toList();
+      expect(matching.length, 1);
+    });
+
+    test('Check 3.3: Conflicting metadata for existing transfer ID is strictly rejected with TransferConflictException', () async {
+      final offer = FileTransferOffer(
+        transferId: 'TF-CONFLICT-CHECK',
+        offerId: 'OFF-CONF-1',
+        senderId: 'ML-DEVICE-ALICE',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'original.txt',
+        fileSize: 1000,
+        totalChunks: 1,
+        createdAt: mockNow,
+        expiresAt: mockNow.add(const Duration(minutes: 5)),
+      );
+
+      await bobService.receiveOffer(
+        offer: offer,
+        authenticatedSenderId: 'ML-DEVICE-ALICE',
+      );
+
+      final conflictingOffer = FileTransferOffer(
+        transferId: 'TF-CONFLICT-CHECK',
+        offerId: 'OFF-CONF-2',
+        senderId: 'ML-DEVICE-ALICE',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'original.txt',
+        fileSize: 5000,
+        totalChunks: 1,
+        createdAt: mockNow,
+        expiresAt: mockNow.add(const Duration(minutes: 5)),
+      );
+
+      expect(
+        () => bobService.receiveOffer(
+          offer: conflictingOffer,
+          authenticatedSenderId: 'ML-DEVICE-ALICE',
+        ),
+        throwsA(isA<TransferConflictException>().having(
+          (e) => e.message,
+          'message',
+          contains('Conflicting transfer with ID "TF-CONFLICT-CHECK" already exists'),
+        )),
+      );
+    });
+
+    test('Check 3.4: Single-instance concurrent accept and reject operations allow only one decision to win', () async {
+      final offer = FileTransferOffer(
+        transferId: 'TF-CONCUR-WIN',
+        offerId: 'OFF-WIN',
+        senderId: 'ML-DEVICE-ALICE',
+        recipientId: 'ML-DEVICE-BOB',
+        fileName: 'race.txt',
+        fileSize: 2000,
+        totalChunks: 1,
+        createdAt: mockNow,
+        expiresAt: mockNow.add(const Duration(minutes: 5)),
+      );
+
+      await bobService.receiveOffer(
+        offer: offer,
+        authenticatedSenderId: 'ML-DEVICE-ALICE',
+      );
+
+      var acceptWon = false;
+      var rejectWon = false;
+      var errorCount = 0;
+
+      final futures = [
+        () async {
+          try {
+            await bobService.acceptOffer(transferId: 'TF-CONCUR-WIN', offerId: 'OFF-WIN');
+            acceptWon = true;
+          } catch (_) {
+            errorCount++;
+          }
+        }(),
+        () async {
+          try {
+            await bobService.rejectOffer(transferId: 'TF-CONCUR-WIN', offerId: 'OFF-WIN');
+            rejectWon = true;
+          } catch (_) {
+            errorCount++;
+          }
+        }(),
+      ];
+
+      await Future.wait(futures);
+
+      expect(errorCount, 1, reason: 'Exactly one concurrent decision must fail');
+      expect(acceptWon ^ rejectWon, isTrue, reason: 'Exactly one decision must win');
+
+      final finalRecord = await bobDb.getFileTransfer('TF-CONCUR-WIN');
+      expect(
+        finalRecord!.status == FileTransferStatus.acceptSent.toDbValue() ||
+            finalRecord.status == FileTransferStatus.cancelled.toDbValue(),
+        isTrue,
+      );
     });
   });
 }

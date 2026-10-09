@@ -7,6 +7,7 @@ import 'package:meshlink/features/messages/data/models/ephemeral_session.dart';
 import 'package:meshlink/features/messages/data/models/session_encrypted_payload.dart';
 import 'package:meshlink/features/messages/data/repositories/message_repository.dart';
 import 'package:meshlink/features/messages/data/services/directional_session_encryption_service.dart';
+import 'package:meshlink/features/messages/data/services/mesh_identity_service.dart';
 import 'package:meshlink/features/messages/domain/models/models.dart';
 import 'package:meshlink/features/messages/domain/services/file_transfer_state_machine.dart';
 import 'package:meshlink/features/messages/providers/messaging_providers.dart';
@@ -30,7 +31,7 @@ class InvalidTimestampException extends FileTransferNegotiationException {
   const InvalidTimestampException(super.message);
 }
 
-/// Thrown when the remote peer is untrusted or compromised.
+/// Thrown when the remote peer is untrusted, compromised, or fails verification policy.
 class PeerUntrustedException extends FileTransferNegotiationException {
   const PeerUntrustedException(super.message);
 }
@@ -71,7 +72,8 @@ class InvalidNegotiationStateException extends FileTransferNegotiationException 
 ///
 /// Security and architectural properties:
 /// - Reuses Phase 7 session encryption with canonical AAD.
-/// - Validates remote peer trust status before recording incoming offers.
+/// - Validates remote peer trust status before recording incoming offers, accepting offers, or handling decisions.
+/// - Supports strict peer verification policy (`requireVerifiedPeer`), rejecting `tofu_unverified` or missing records when required.
 /// - Enforces strict state transitions via [FileTransferStateMachine].
 /// - Handles duplicate messages and idempotent responses safely.
 /// - Zero filesystem IO: no staging files created or buffers allocated during negotiation.
@@ -87,6 +89,7 @@ class FileTransferNegotiationService {
     this.defaultOfferValidity = const Duration(minutes: 5),
     this.maxFutureSkew = const Duration(minutes: 2),
     this.maxPendingOffers = 256,
+    this.requireVerifiedPeer = false,
   })  : _db = database,
         _encryptionService =
             encryptionService ?? DirectionalSessionEncryptionService(),
@@ -102,12 +105,61 @@ class FileTransferNegotiationService {
   final Duration defaultOfferValidity;
   final Duration maxFutureSkew;
   final int maxPendingOffers;
+  final bool requireVerifiedPeer;
+
+  /// Dedicated packet types for canonical AAD construction.
+  static const String offerPacketType = 'file_offer';
+  static const String decisionPacketType = 'file_decision';
 
   /// Bounded in-memory cache of pending offers for request/offer ID and expiration checks.
   final Map<String, FileTransferOffer> _pendingOffers = {};
 
   /// Per-transfer asynchronous locks to ensure serialized, atomic operations.
   final Map<String, Completer<void>> _transferLocks = {};
+
+  /// Constructs canonical binary Authenticated Additional Data (AAD) for a file offer.
+  static Uint8List buildOfferAad({
+    int version = 2,
+    required String sessionId,
+    required String originId,
+    required String destinationId,
+    required String transferId,
+    int? epoch,
+    int? sequenceNumber,
+  }) {
+    return DirectionalSessionEncryptionService.buildCanonicalAad(
+      version: version,
+      packetType: offerPacketType,
+      sessionId: sessionId,
+      originId: originId,
+      destinationId: destinationId,
+      messageId: transferId,
+      epoch: epoch,
+      sequenceNumber: sequenceNumber,
+    );
+  }
+
+  /// Constructs canonical binary Authenticated Additional Data (AAD) for a file decision.
+  static Uint8List buildDecisionAad({
+    int version = 2,
+    required String sessionId,
+    required String originId,
+    required String destinationId,
+    required String transferId,
+    int? epoch,
+    int? sequenceNumber,
+  }) {
+    return DirectionalSessionEncryptionService.buildCanonicalAad(
+      version: version,
+      packetType: decisionPacketType,
+      sessionId: sessionId,
+      originId: originId,
+      destinationId: destinationId,
+      messageId: transferId,
+      epoch: epoch,
+      sequenceNumber: sequenceNumber,
+    );
+  }
 
   /// Executes [action] under a per-transfer async lock to prevent concurrency races.
   Future<T> _synchronized<T>(String transferId, Future<T> Function() action) async {
@@ -121,6 +173,70 @@ class FileTransferNegotiationService {
     } finally {
       _transferLocks.remove(transferId);
       completer.complete();
+    }
+  }
+
+  /// Internal helper to verify peer trust according to policy.
+  Future<void> _verifyPeerTrust({
+    required String peerId,
+    required String operation,
+  }) async {
+    final repo = messageRepository;
+    if (repo == null) return;
+
+    final peer = await repo.getPeerIdentity(peerId);
+    if (peer == null) {
+      if (requireVerifiedPeer) {
+        throw PeerUntrustedException(
+          'Cannot $operation: peer $peerId identity is missing (verified identity required).',
+        );
+      }
+      return; // Permitted under default TOFU
+    }
+
+    final status = peer.trustStatus.trim().toLowerCase();
+    if (status == 'compromised') {
+      throw PeerUntrustedException(
+        'Cannot $operation: peer $peerId is marked as compromised.',
+      );
+    }
+
+    if (requireVerifiedPeer && status != 'verified') {
+      throw PeerUntrustedException(
+        'Cannot $operation: peer $peerId has trustStatus "$status" (verified identity required).',
+      );
+    }
+  }
+
+  /// Internal helper to verify session identity key matches stored peer identity.
+  Future<void> _verifySessionPeerKey({
+    required EphemeralSession session,
+    required String authenticatedSenderId,
+  }) async {
+    if (session.peerId != authenticatedSenderId) {
+      throw PeerUntrustedException(
+        'Session peer ID (${session.peerId}) does not match authenticated sender ($authenticatedSenderId).',
+      );
+    }
+
+    final repo = messageRepository;
+    if (repo != null) {
+      final peer = await repo.getPeerIdentity(authenticatedSenderId);
+      if (peer != null) {
+        try {
+          final storedKey = MeshIdentityService.decodePublicKey(peer.identityPublicKey);
+          if (!EphemeralSession.constantTimeCompare(session.peerIdentityPublicKey, storedKey)) {
+            throw PeerUntrustedException(
+              'Peer $authenticatedSenderId presented identity key mismatch against stored identity record.',
+            );
+          }
+        } catch (e) {
+          if (e is PeerUntrustedException) rethrow;
+          throw PeerUntrustedException(
+            'Invalid stored identity key for peer $authenticatedSenderId: $e',
+          );
+        }
+      }
     }
   }
 
@@ -144,7 +260,13 @@ class FileTransferNegotiationService {
       final expiresAt = now.add(validity);
       final offerId = 'offer_$transferId';
 
-      // 1. Calculate chunk count and validate
+      // 1. Peer trust verification
+      await _verifyPeerTrust(
+        peerId: recipientId,
+        operation: 'create offer',
+      );
+
+      // 2. Calculate chunk count and validate
       final int totalChunks = fileSize == 0 ? 0 : (fileSize / chunkSize).ceil();
 
       final offer = FileTransferOffer(
@@ -253,15 +375,10 @@ class FileTransferNegotiationService {
       }
 
       // 4. Peer trust verification
-      final repo = messageRepository;
-      if (repo != null) {
-        final peer = await repo.getPeerIdentity(offer.senderId);
-        if (peer != null && peer.trustStatus.toLowerCase() == 'compromised') {
-          throw PeerUntrustedException(
-            'Sender ${offer.senderId} is marked as compromised.',
-          );
-        }
-      }
+      await _verifyPeerTrust(
+        peerId: offer.senderId,
+        operation: 'receive offer',
+      );
 
       // 5. Temporal validations
       final now = _clock();
@@ -382,6 +499,12 @@ class FileTransferNegotiationService {
           'Cannot accept transfer in status "${transfer.status.name}" (must be offerReceived).',
         );
       }
+
+      // Verify peer trust before accepting
+      await _verifyPeerTrust(
+        peerId: transfer.peerId,
+        operation: 'accept offer',
+      );
 
       // Pending offer validation
       final pending = _pendingOffers[transferId];
@@ -545,7 +668,13 @@ class FileTransferNegotiationService {
         );
       }
 
-      // 4. Future timestamp skew check
+      // 4. Peer trust verification
+      await _verifyPeerTrust(
+        peerId: decision.senderId,
+        operation: 'handle decision',
+      );
+
+      // 5. Future timestamp skew check
       final now = _clock();
       if (decision.isFuture(now, maxFutureSkew)) {
         throw InvalidTimestampException(
@@ -553,7 +682,7 @@ class FileTransferNegotiationService {
         );
       }
 
-      // 5. Query transfer from database
+      // 6. Query transfer from database
       final entry = await _db.getFileTransfer(decision.transferId);
       if (entry == null) {
         throw TransferNotFoundException(
@@ -670,13 +799,18 @@ class FileTransferNegotiationService {
     int? sequenceNumber,
     Uint8List? explicitNonce,
   }) async {
-    final aad = DirectionalSessionEncryptionService.buildCanonicalAad(
+    if (session.peerId != offer.recipientId) {
+      throw FileTransferNegotiationException(
+        'Session peer ID (${session.peerId}) does not match offer recipient (${offer.recipientId}).',
+      );
+    }
+
+    final aad = buildOfferAad(
       version: offer.version,
-      packetType: 'file_offer',
       sessionId: session.sessionId,
       originId: offer.senderId,
       destinationId: offer.recipientId,
-      messageId: offer.transferId,
+      transferId: offer.transferId,
       epoch: epoch,
       sequenceNumber: sequenceNumber,
     );
@@ -701,7 +835,15 @@ class FileTransferNegotiationService {
       aad: aad,
     );
     try {
-      return FileTransferOffer.fromJson(jsonText);
+      final offer = FileTransferOffer.fromJson(jsonText);
+      if (offer.senderId != session.peerId) {
+        throw FileTransferNegotiationException(
+          'Decrypted offer sender (${offer.senderId}) does not match session peer (${session.peerId}).',
+        );
+      }
+      return offer;
+    } on FileTransferNegotiationException {
+      rethrow;
     } catch (e) {
       throw FileTransferNegotiationException('Malformed offer payload: $e');
     }
@@ -715,13 +857,18 @@ class FileTransferNegotiationService {
     int? sequenceNumber,
     Uint8List? explicitNonce,
   }) async {
-    final aad = DirectionalSessionEncryptionService.buildCanonicalAad(
+    if (session.peerId != decision.recipientId) {
+      throw FileTransferNegotiationException(
+        'Session peer ID (${session.peerId}) does not match decision recipient (${decision.recipientId}).',
+      );
+    }
+
+    final aad = buildDecisionAad(
       version: decision.version,
-      packetType: 'file_decision',
       sessionId: session.sessionId,
       originId: decision.senderId,
       destinationId: decision.recipientId,
-      messageId: decision.transferId,
+      transferId: decision.transferId,
       epoch: epoch,
       sequenceNumber: sequenceNumber,
     );
@@ -746,7 +893,15 @@ class FileTransferNegotiationService {
       aad: aad,
     );
     try {
-      return FileTransferDecision.fromJson(jsonText);
+      final decision = FileTransferDecision.fromJson(jsonText);
+      if (decision.senderId != session.peerId) {
+        throw FileTransferNegotiationException(
+          'Decrypted decision sender (${decision.senderId}) does not match session peer (${session.peerId}).',
+        );
+      }
+      return decision;
+    } on FileTransferNegotiationException {
+      rethrow;
     } catch (e) {
       throw FileTransferNegotiationException('Malformed decision payload: $e');
     }
@@ -759,6 +914,10 @@ class FileTransferNegotiationService {
     required Uint8List aad,
     required String authenticatedSenderId,
   }) async {
+    await _verifySessionPeerKey(
+      session: session,
+      authenticatedSenderId: authenticatedSenderId,
+    );
     final offer = await decryptOffer(
       session: session,
       encrypted: encrypted,
@@ -777,6 +936,10 @@ class FileTransferNegotiationService {
     required Uint8List aad,
     required String authenticatedSenderId,
   }) async {
+    await _verifySessionPeerKey(
+      session: session,
+      authenticatedSenderId: authenticatedSenderId,
+    );
     final decision = await decryptDecision(
       session: session,
       encrypted: encrypted,
