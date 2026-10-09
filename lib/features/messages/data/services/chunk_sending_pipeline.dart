@@ -70,6 +70,9 @@ class FileTransferCancellationToken {
 /// - [maxInFlightChunks]: 1 (stop-and-wait handoff, strictly bounded memory).
 /// - [interChunkDelay]: [Duration.zero] (microseconds/milliseconds).
 /// - [maxChunksPerSecond]: null (chunks per second).
+///
+/// Note: This policy controls transmission pacing in terms of chunks (packets) per
+/// second and inter-chunk delays. It does NOT claim byte-per-second bandwidth throttling.
 class ChunkSendingPolicy {
   const ChunkSendingPolicy({
     this.maxInFlightChunks = 1,
@@ -94,6 +97,35 @@ class ChunkSendingPolicy {
   /// Optional injectable delay function for deterministic testing without real wall-clock sleeps.
   /// Defaults to [Future.delayed].
   final Future<void> Function(Duration duration)? delayFunction;
+
+  /// Validates policy parameters at runtime, throwing [ArgumentError] on invalid values.
+  void validate() {
+    if (maxInFlightChunks < 1) {
+      throw ArgumentError.value(
+        maxInFlightChunks,
+        'maxInFlightChunks',
+        'maxInFlightChunks must be at least 1',
+      );
+    }
+    if (interChunkDelay.isNegative) {
+      throw ArgumentError.value(
+        interChunkDelay,
+        'interChunkDelay',
+        'interChunkDelay cannot be negative',
+      );
+    }
+    if (maxChunksPerSecond != null) {
+      if (maxChunksPerSecond!.isNaN ||
+          maxChunksPerSecond!.isInfinite ||
+          maxChunksPerSecond! <= 0) {
+        throw ArgumentError.value(
+          maxChunksPerSecond,
+          'maxChunksPerSecond',
+          'maxChunksPerSecond must be a finite positive number (> 0)',
+        );
+      }
+    }
+  }
 
   /// Computes the effective delay required between chunk emissions based on
   /// [interChunkDelay] and [maxChunksPerSecond].
@@ -218,6 +250,19 @@ class PeerUntrustedSendingException extends ChunkSendingException {
   const PeerUntrustedSendingException(super.message, [super.cause]);
 }
 
+/// Internal tracked in-flight chunk representation.
+class _InFlightSend {
+  _InFlightSend({
+    required this.chunkIndex,
+    required this.chunkLength,
+    required this.future,
+  });
+
+  final int chunkIndex;
+  final int chunkLength;
+  final Future<bool> future;
+}
+
 /// Core pipeline service for streaming, encrypting, rate-limiting, and handing off
 /// file chunks to the local transport subsystem.
 ///
@@ -235,9 +280,13 @@ class PeerUntrustedSendingException extends ChunkSendingException {
 /// 5. Configurable Rate Control: Enforces inter-chunk delays and throughput limits with
 ///    an injectable delay function for deterministic testing.
 /// 6. Prompt Cancellation: Monitors [FileTransferCancellationToken] between and during chunk operations,
-///    promptly terminating chunk reading and closing all file handles.
+///    promptly terminating chunk reading, draining pending sends, and closing all file handles.
 /// 7. State Machine Compliance: Transitions transfer from `acceptReceived` or `paused` to
 ///    `transferring`. NEVER marks the transfer `completed` upon finishing handoffs.
+/// 8. Source-File Mutation Semantics: Does not take OS-level snapshot locks. If the source
+///    file changes size or structure while streaming, length and boundary mismatches are
+///    strictly caught and rejected with [ChunkMetadataMismatchException]. Whole-file assembly
+///    and SHA-256 hash validation are deferred to Step 13.
 class ChunkSendingPipeline {
   ChunkSendingPipeline({
     required this.localDeviceId,
@@ -289,6 +338,65 @@ class ChunkSendingPipeline {
     ChunkProgressCallback? onProgress,
     bool throwOnError = true,
   }) async {
+    final effectivePolicy = policy ?? _defaultPolicy;
+    effectivePolicy.validate();
+
+    var currentStatus = transfer.status;
+    var chunksSent = 0;
+    var bytesSent = 0;
+    final inFlightSends = <_InFlightSend>[];
+
+    Object? inFlightError;
+    int? failedInFlightChunkIndex;
+    final failureCompleter = Completer<void>();
+
+    void recordInFlightError(int chunkIndex, Object error) {
+      if (inFlightError == null && failedInFlightChunkIndex == null) {
+        inFlightError = error;
+        failedInFlightChunkIndex = chunkIndex;
+        if (!failureCompleter.isCompleted) {
+          failureCompleter.complete();
+        }
+      }
+    }
+
+    void recordInFlightRejection(int chunkIndex) {
+      if (inFlightError == null && failedInFlightChunkIndex == null) {
+        failedInFlightChunkIndex = chunkIndex;
+        if (!failureCompleter.isCompleted) {
+          failureCompleter.complete();
+        }
+      }
+    }
+
+    void checkInFlightFailure() {
+      if (inFlightError != null) {
+        throw ChunkSendFailureException(
+          'Transport threw exception during local handoff of chunk $failedInFlightChunkIndex: $inFlightError',
+          chunkIndex: failedInFlightChunkIndex,
+          cause: inFlightError,
+        );
+      }
+      if (failedInFlightChunkIndex != null) {
+        throw ChunkSendFailureException(
+          'Transport refused or failed local handoff for chunk $failedInFlightChunkIndex of transfer ${transfer.transferId}.',
+          chunkIndex: failedInFlightChunkIndex,
+        );
+      }
+    }
+
+    Future<void> drainInFlightSends() async {
+      final pending = List<_InFlightSend>.from(inFlightSends);
+      inFlightSends.clear();
+      for (final item in pending) {
+        try {
+          await item.future;
+        } catch (_) {
+          // Observed to prevent unhandled asynchronous exceptions in the event loop.
+        }
+      }
+    }
+
     try {
       // 1. Initial cancellation check
       if (cancellationToken != null && cancellationToken.isCancelled) {
@@ -296,8 +404,6 @@ class ChunkSendingPipeline {
           'Transfer ${transfer.transferId} was cancelled before sending started: ${cancellationToken.reason ?? "no reason specified"}',
         );
       }
-
-      final effectivePolicy = policy ?? _defaultPolicy;
 
       // 2. Pre-flight validations
       await _validatePreFlight(
@@ -316,6 +422,8 @@ class ChunkSendingPipeline {
           'Cannot start sending transfer ${transfer.transferId}: ${transitionResult.error}',
         );
       }
+
+      currentStatus = FileTransferStatus.transferring;
 
       // Persist status change to database if database is configured
       if (database != null) {
@@ -344,41 +452,76 @@ class ChunkSendingPipeline {
       }
 
       // 5. Stream and send chunks with bounded backpressure and serialized encryption
-      var chunksSent = 0;
-      var bytesSent = 0;
+      var chunksProduced = 0;
 
-      final inFlightFutures = <Future<bool>>[];
       final chunkStream = _streamReader.readFile(
         filePath: transfer.localPath,
         chunkSize: transfer.chunkSize,
       );
 
       Future<void> awaitOldestInFlight() async {
-        if (inFlightFutures.isNotEmpty) {
-          final success = await inFlightFutures.removeAt(0);
-          if (!success) {
-            throw ChunkSendFailureException(
-              'Transport refused or failed local handoff for in-flight chunk of transfer ${transfer.transferId}.',
-            );
+        if (inFlightSends.isEmpty) return;
+        checkInFlightFailure();
+
+        final inFlight = inFlightSends.removeAt(0);
+
+        bool success;
+        try {
+          if (!failureCompleter.isCompleted) {
+            await Future.any([inFlight.future, failureCompleter.future]);
           }
+          checkInFlightFailure();
+          success = await inFlight.future;
+        } catch (e) {
+          await drainInFlightSends();
+          if (e is ChunkSendFailureException) rethrow;
+          throw ChunkSendFailureException(
+            'Transport threw exception during local handoff of chunk ${inFlight.chunkIndex}: $e',
+            chunkIndex: inFlight.chunkIndex,
+            cause: e,
+          );
         }
+
+        if (!success) {
+          await drainInFlightSends();
+          throw ChunkSendFailureException(
+            'Transport refused or failed local handoff for chunk ${inFlight.chunkIndex} of transfer ${transfer.transferId}.',
+            chunkIndex: inFlight.chunkIndex,
+          );
+        }
+
+        // Successfully confirmed local handoff: update completed progress counters
+        chunksSent++;
+        bytesSent += inFlight.chunkLength;
+        onProgress?.call(
+          ChunkSendProgress(
+            transferId: transfer.transferId,
+            chunkIndex: inFlight.chunkIndex,
+            totalChunks: transfer.totalChunks,
+            bytesSent: bytesSent,
+            totalBytes: transfer.fileSize,
+          ),
+        );
       }
 
       Future<void> awaitAllInFlight() async {
-        while (inFlightFutures.isNotEmpty) {
+        while (inFlightSends.isNotEmpty) {
           await awaitOldestInFlight();
         }
       }
 
       await for (final chunk in chunkStream) {
+        checkInFlightFailure();
+
         // A. Cooperative cancellation check
         if (cancellationToken != null && cancellationToken.isCancelled) {
+          await drainInFlightSends();
           throw ChunkSendCancelledException(
             'Transfer ${transfer.transferId} cancelled by token: ${cancellationToken.reason ?? "no reason specified"}',
           );
         }
 
-        final chunkIndex = chunksSent;
+        final chunkIndex = chunksProduced;
         if (chunkIndex >= transfer.totalChunks) {
           throw ChunkMetadataMismatchException(
             'Chunk index ($chunkIndex) exceeded totalChunks (${transfer.totalChunks}) for transfer ${transfer.transferId}.',
@@ -402,20 +545,30 @@ class ChunkSendingPipeline {
           );
         }
 
-        // C. Rate control and pacing (applied between chunks, i.e. chunkIndex > 0)
+        // C. Backpressure: await in-flight capacity if window is full
+        while (inFlightSends.length >= effectivePolicy.maxInFlightChunks) {
+          await awaitOldestInFlight();
+        }
+
+        checkInFlightFailure();
+
+        // D. Rate control and pacing (applied between chunks, i.e. chunkIndex > 0)
         if (chunkIndex > 0 && effectivePolicy.effectiveChunkDelay > Duration.zero) {
           final delayFn = effectivePolicy.delayFunction ?? Future.delayed;
           await delayFn(effectivePolicy.effectiveChunkDelay);
 
+          checkInFlightFailure();
+
           // Re-check cancellation after pacing delay
           if (cancellationToken != null && cancellationToken.isCancelled) {
+            await drainInFlightSends();
             throw ChunkSendCancelledException(
               'Transfer ${transfer.transferId} cancelled during pacing delay: ${cancellationToken.reason ?? "no reason specified"}',
             );
           }
         }
 
-        // D. Serialized chunk encryption
+        // E. Serialized chunk encryption
         final envelope = await _cryptoService.encryptChunk(
           session: session,
           transferId: transfer.transferId,
@@ -428,50 +581,45 @@ class ChunkSendingPipeline {
           chunkLength: expectedLength,
         );
 
-        // E. Backpressure: await in-flight capacity if window is full
-        while (inFlightFutures.length >= effectivePolicy.maxInFlightChunks) {
-          await awaitOldestInFlight();
-        }
+        checkInFlightFailure();
 
         // F. Hand off chunk to transport sender
-        if (effectivePolicy.maxInFlightChunks == 1) {
-          // Stop-and-wait: await immediately
-          bool handoffSuccess;
-          try {
-            handoffSuccess = await transportSender.sendChunk(envelope);
-          } catch (e) {
-            throw ChunkSendFailureException(
-              'Transport threw exception during local handoff of chunk $chunkIndex: $e',
-              chunkIndex: chunkIndex,
-              cause: e,
-            );
-          }
-
-          if (!handoffSuccess) {
-            throw ChunkSendFailureException(
-              'Transport refused or failed local handoff for chunk $chunkIndex of transfer ${transfer.transferId}.',
-              chunkIndex: chunkIndex,
-            );
-          }
-        } else {
-          // Bounded in-flight queue
-          final sendFuture = transportSender.sendChunk(envelope);
-          inFlightFutures.add(sendFuture);
+        Future<bool> sendFuture;
+        try {
+          sendFuture = transportSender.sendChunk(envelope);
+          sendFuture.then(
+            (success) {
+              if (!success) {
+                recordInFlightRejection(chunkIndex);
+              }
+            },
+            onError: (err) {
+              recordInFlightError(chunkIndex, err as Object);
+            },
+          );
+        } catch (e) {
+          recordInFlightError(chunkIndex, e);
+          await drainInFlightSends();
+          throw ChunkSendFailureException(
+            'Transport threw exception during local handoff of chunk $chunkIndex: $e',
+            chunkIndex: chunkIndex,
+            cause: e,
+          );
         }
 
-        chunksSent++;
-        bytesSent += chunk.length;
-
-        // G. Progress notification
-        onProgress?.call(
-          ChunkSendProgress(
-            transferId: transfer.transferId,
+        inFlightSends.add(
+          _InFlightSend(
             chunkIndex: chunkIndex,
-            totalChunks: transfer.totalChunks,
-            bytesSent: bytesSent,
-            totalBytes: transfer.fileSize,
+            chunkLength: chunk.length,
+            future: sendFuture,
           ),
         );
+        chunksProduced++;
+
+        // If stop-and-wait (maxInFlight == 1), await immediately
+        if (effectivePolicy.maxInFlightChunks == 1) {
+          await awaitOldestInFlight();
+        }
       }
 
       // Await any remaining in-flight handoffs
@@ -494,18 +642,21 @@ class ChunkSendingPipeline {
         totalBytes: transfer.fileSize,
         status: FileTransferStatus.transferring,
       );
-    } on ChunkSendingException {
+    } on ChunkSendingException catch (e) {
+      await drainInFlightSends();
       if (throwOnError) rethrow;
       return ChunkSendingResult(
         transferId: transfer.transferId,
-        chunksSent: 0,
+        chunksSent: chunksSent,
         totalChunks: transfer.totalChunks,
-        bytesSent: 0,
+        bytesSent: bytesSent,
         totalBytes: transfer.fileSize,
-        status: transfer.status,
-        error: this,
+        status: currentStatus,
+        isCancelled: e is ChunkSendCancelledException,
+        error: e,
       );
     } catch (e) {
+      await drainInFlightSends();
       if (throwOnError) {
         throw ChunkSendFailureException(
           'Unexpected error in chunk sending pipeline: $e',
@@ -514,11 +665,11 @@ class ChunkSendingPipeline {
       }
       return ChunkSendingResult(
         transferId: transfer.transferId,
-        chunksSent: 0,
+        chunksSent: chunksSent,
         totalChunks: transfer.totalChunks,
-        bytesSent: 0,
+        bytesSent: bytesSent,
         totalBytes: transfer.fileSize,
-        status: transfer.status,
+        status: currentStatus,
         error: e,
       );
     }

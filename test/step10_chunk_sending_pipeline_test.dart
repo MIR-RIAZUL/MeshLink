@@ -14,6 +14,7 @@ import 'package:meshlink/features/messages/data/services/file_transfer_crypto_se
 import 'package:meshlink/features/messages/data/services/handshake_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_identity_service.dart';
 import 'package:meshlink/features/messages/domain/models/models.dart';
+import 'package:meshlink/features/messages/domain/services/file_transfer_state_machine.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
@@ -985,6 +986,288 @@ void main() {
       expect(reports[3].chunkIndex, 3);
       expect(reports[3].bytesSent, 200);
       expect(reports[3].percentage, 100);
+    });
+  });
+
+  group('Audit 1: In-Flight Concurrency, Asynchronous Failures & Draining', () {
+    test('24. In-flight failure when maxInFlightChunks > 1 observes error without leaking async exceptions and drains pending sends', () async {
+      // 5 chunks of 32 bytes = 160 bytes
+      final file = await createTestFile('inflight_failure.bin', 160);
+      final sessions = await establishSession();
+      final transfer = await createAndPersistTransfer(
+        transferId: 'TX-INFLIGHT-FAIL',
+        filePath: file.path,
+        fileSize: 160,
+        chunkSize: 32, // 5 chunks
+      );
+
+      final attemptedChunks = <int>[];
+
+      // maxInFlightChunks: 3
+      // Chunk 0: takes 40ms to complete successfully
+      // Chunk 1: throws after 10ms
+      // Chunk 2: takes 50ms to complete successfully
+      final sender = FunctionalChunkTransportSender((env) async {
+        attemptedChunks.add(env.chunkIndex);
+        if (env.chunkIndex == 0) {
+          await Future<void>.delayed(const Duration(milliseconds: 40));
+          return true;
+        } else if (env.chunkIndex == 1) {
+          await Future<void>.delayed(const Duration(milliseconds: 10));
+          throw const SocketException('Simulated radio failure on chunk 1');
+        } else if (env.chunkIndex == 2) {
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          return true;
+        }
+        return true;
+      });
+
+      const policy = ChunkSendingPolicy(
+        maxInFlightChunks: 3,
+      );
+
+      await expectLater(
+        pipeline.sendTransfer(
+          transfer: transfer,
+          session: sessions.sessionAlice,
+          transportSender: sender,
+          policy: policy,
+        ),
+        throwsA(isA<ChunkSendFailureException>().having(
+          (e) => e.chunkIndex,
+          'chunkIndex',
+          1,
+        )),
+      );
+
+      // Chunks 3 and 4 were never produced because chunk 1 failed and backpressure halted production
+      expect(attemptedChunks.contains(3), isFalse);
+      expect(attemptedChunks.contains(4), isFalse);
+
+      // Stream handle must be closed cleanly
+      expect(streamReader.activeHandleCount, 0);
+    });
+
+    test('25. In-flight cancellation with maxInFlightChunks > 1 drains pending sends cleanly', () async {
+      final file = await createTestFile('inflight_cancel.bin', 160);
+      final sessions = await establishSession();
+      final transfer = await createAndPersistTransfer(
+        transferId: 'TX-INFLIGHT-CANCEL',
+        filePath: file.path,
+        fileSize: 160,
+        chunkSize: 32,
+      );
+
+      final cancellationToken = FileTransferCancellationToken();
+      final sender = FunctionalChunkTransportSender((env) async {
+        if (env.chunkIndex == 1) {
+          cancellationToken.cancel('User canceled during in-flight send');
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 15));
+        return true;
+      });
+
+      const policy = ChunkSendingPolicy(
+        maxInFlightChunks: 3,
+      );
+
+      await expectLater(
+        pipeline.sendTransfer(
+          transfer: transfer,
+          session: sessions.sessionAlice,
+          transportSender: sender,
+          policy: policy,
+          cancellationToken: cancellationToken,
+        ),
+        throwsA(isA<ChunkSendCancelledException>()),
+      );
+
+      expect(streamReader.activeHandleCount, 0);
+    });
+
+    test('26. Synchronous transport throw during sendChunk reports correct chunkIndex and closes resources', () async {
+      final file = await createTestFile('sync_throw.bin', 64);
+      final sessions = await establishSession();
+      final transfer = await createAndPersistTransfer(
+        transferId: 'TX-SYNC-THROW',
+        filePath: file.path,
+        fileSize: 64,
+        chunkSize: 32,
+      );
+
+      final sender = FunctionalChunkTransportSender((env) {
+        if (env.chunkIndex == 0) {
+          throw StateError('Synchronous driver crash');
+        }
+        return Future.value(true);
+      });
+
+      await expectLater(
+        pipeline.sendTransfer(
+          transfer: transfer,
+          session: sessions.sessionAlice,
+          transportSender: sender,
+        ),
+        throwsA(isA<ChunkSendFailureException>().having(
+          (e) => e.chunkIndex,
+          'chunkIndex',
+          0,
+        )),
+      );
+
+      expect(streamReader.activeHandleCount, 0);
+    });
+  });
+
+  group('Audit 2: Rate Policy Validation & Pacing Semantics', () {
+    test('27. ChunkSendingPolicy rejects negative delays, non-positive or non-finite rates', () {
+      // Negative interChunkDelay
+      expect(
+        () => const ChunkSendingPolicy(interChunkDelay: Duration(seconds: -1)).validate(),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      // maxChunksPerSecond == 0
+      expect(
+        () => const ChunkSendingPolicy(maxChunksPerSecond: 0).validate(),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      // maxChunksPerSecond < 0
+      expect(
+        () => const ChunkSendingPolicy(maxChunksPerSecond: -5.0).validate(),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      // maxChunksPerSecond is NaN
+      expect(
+        () => const ChunkSendingPolicy(maxChunksPerSecond: double.nan).validate(),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      // maxChunksPerSecond is infinity
+      expect(
+        () => const ChunkSendingPolicy(maxChunksPerSecond: double.infinity).validate(),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      // maxInFlightChunks < 1
+      expect(
+        () => ChunkSendingPolicy(maxInFlightChunks: 0),
+        throwsA(isA<AssertionError>()),
+      );
+    });
+
+    test('28. Effective chunk delay calculation handles combinations correctly', () {
+      const policyDefault = ChunkSendingPolicy();
+      expect(policyDefault.effectiveChunkDelay, Duration.zero);
+
+      const policyDelayOnly = ChunkSendingPolicy(
+        interChunkDelay: Duration(milliseconds: 50),
+      );
+      expect(policyDelayOnly.effectiveChunkDelay, const Duration(milliseconds: 50));
+
+      const policyRateOnly = ChunkSendingPolicy(
+        maxChunksPerSecond: 10, // 1,000,000 / 10 = 100,000 micros = 100ms
+      );
+      expect(policyRateOnly.effectiveChunkDelay, const Duration(milliseconds: 100));
+
+      // When both are specified, max is selected
+      const policyBoth = ChunkSendingPolicy(
+        interChunkDelay: Duration(milliseconds: 150),
+        maxChunksPerSecond: 10, // 100ms
+      );
+      expect(policyBoth.effectiveChunkDelay, const Duration(milliseconds: 150));
+    });
+  });
+
+  group('Audit 3: State Persistence, Non-Completion & Resumption Semantics', () {
+    test('29. Transport failure with throwOnError: false leaves transfer in transferring and never completed', () async {
+      final file = await createTestFile('fail_result_check.bin', 64);
+      final sessions = await establishSession();
+      final transfer = await createAndPersistTransfer(
+        transferId: 'TX-NO-THROW-FAIL',
+        filePath: file.path,
+        fileSize: 64,
+        chunkSize: 32,
+      );
+
+      final sender = FunctionalChunkTransportSender((env) async {
+        if (env.chunkIndex == 1) return false;
+        return true;
+      });
+
+      final result = await pipeline.sendTransfer(
+        transfer: transfer,
+        session: sessions.sessionAlice,
+        transportSender: sender,
+        throwOnError: false,
+      );
+
+      expect(result.isSuccess, isFalse);
+      expect(result.error, isA<ChunkSendFailureException>());
+      expect(result.status, FileTransferStatus.transferring);
+      expect(result.status, isNot(equals(FileTransferStatus.completed)));
+      expect(result.chunksSent, 1);
+
+      // Verify database persistence never reached completed
+      final dbRecord = await aliceDb.getFileTransfer('TX-NO-THROW-FAIL');
+      expect(dbRecord!.status, FileTransferStatus.transferring.toDbValue());
+      expect(dbRecord.status, isNot(equals(FileTransferStatus.completed.toDbValue())));
+    });
+
+    test('30. FileTransferStateMachine enforces that failed state is terminal and cannot transition', () {
+      const sm = FileTransferStateMachine.instance;
+
+      expect(sm.isTerminal(FileTransferStatus.failed), isTrue);
+
+      for (final targetStatus in FileTransferStatus.values) {
+        final transition = sm.transition(
+          direction: FileTransferDirection.outgoing,
+          from: FileTransferStatus.failed,
+          to: targetStatus,
+        );
+        expect(
+          transition.allowed,
+          isFalse,
+          reason: 'Failed transfer must not be allowed to transition to ${targetStatus.name}',
+        );
+      }
+    });
+  });
+
+  group('Audit 4: Mid-Stream Source File Mutation', () {
+    test('31. Truncating the source file mid-transfer throws ChunkMetadataMismatchException and cleans up handles', () async {
+      final file = await createTestFile('mutate_truncate.bin', 128);
+      final sessions = await establishSession();
+      final transfer = await createAndPersistTransfer(
+        transferId: 'TX-MUTATE-TRUNC',
+        filePath: file.path,
+        fileSize: 128,
+        chunkSize: 32, // 4 chunks of 32 bytes
+      );
+
+      final sender = FunctionalChunkTransportSender((env) async {
+        if (env.chunkIndex == 1) {
+          // Truncate file on disk to 40 bytes while streaming
+          await file.writeAsBytes(Uint8List(40), flush: true);
+        }
+        return true;
+      });
+
+      await expectLater(
+        pipeline.sendTransfer(
+          transfer: transfer,
+          session: sessions.sessionAlice,
+          transportSender: sender,
+        ),
+        throwsA(isA<ChunkMetadataMismatchException>()),
+      );
+
+      expect(streamReader.activeHandleCount, 0);
+
+      final dbRecord = await aliceDb.getFileTransfer('TX-MUTATE-TRUNC');
+      expect(dbRecord!.status, isNot(equals(FileTransferStatus.completed.toDbValue())));
     });
   });
 }
