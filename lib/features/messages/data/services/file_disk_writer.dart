@@ -305,6 +305,31 @@ class FileDiskWriter {
     });
   }
 
+  /// Reads [length] bytes at the specified [offset] in the staging file.
+  ///
+  /// Guarantees serialized execution with ongoing writes.
+  Future<Uint8List> readAt({
+    required int offset,
+    required int length,
+  }) {
+    return _synchronized(() async {
+      _ensureOpen();
+      _validateWriteRange(offset, length);
+      if (length == 0) return Uint8List(0);
+
+      try {
+        await _raf!.setPosition(offset);
+        final bytes = await _raf!.read(length);
+        return Uint8List.fromList(bytes);
+      } catch (e) {
+        throw FileWriteException(
+          'Failed to read $length bytes at offset $offset in "$_stagingPath": $e',
+          e,
+        );
+      }
+    });
+  }
+
   /// Flushes any buffered written data to the underlying filesystem.
   ///
   /// Note: Durability guarantees depend on the host operating system and filesystem.
