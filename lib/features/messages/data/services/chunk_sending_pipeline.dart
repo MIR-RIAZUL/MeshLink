@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:meshlink/features/messages/data/database/app_database.dart';
 import 'package:meshlink/features/messages/data/models/ephemeral_session.dart';
 import 'package:meshlink/features/messages/data/repositories/message_repository.dart';
+import 'package:meshlink/features/messages/data/services/chunk_ack_service.dart';
 import 'package:meshlink/features/messages/data/services/file_stream_reader.dart';
 import 'package:meshlink/features/messages/data/services/file_transfer_crypto_service.dart';
 import 'package:meshlink/features/messages/domain/models/models.dart';
@@ -70,6 +71,9 @@ class FileTransferCancellationToken {
 /// - [maxInFlightChunks]: 1 (stop-and-wait handoff, strictly bounded memory).
 /// - [interChunkDelay]: [Duration.zero] (microseconds/milliseconds).
 /// - [maxChunksPerSecond]: null (chunks per second).
+/// - [ackTimeout]: Duration(seconds: 5) (wait duration per ACK).
+/// - [maxRetries]: 3 (retransmissions before failing).
+/// - [waitForAcks]: false (defaults to false for local handoff; set true for delivery ACK wait).
 ///
 /// Note: This policy controls transmission pacing in terms of chunks (packets) per
 /// second and inter-chunk delays. It does NOT claim byte-per-second bandwidth throttling.
@@ -79,6 +83,9 @@ class ChunkSendingPolicy {
     this.interChunkDelay = Duration.zero,
     this.maxChunksPerSecond,
     this.delayFunction,
+    this.ackTimeout = const Duration(seconds: 5),
+    this.maxRetries = 3,
+    this.waitForAcks = false,
   }) : assert(maxInFlightChunks >= 1, 'maxInFlightChunks must be at least 1');
 
   /// Maximum number of in-flight chunk handoffs before backpressure is asserted.
@@ -98,6 +105,15 @@ class ChunkSendingPolicy {
   /// Defaults to [Future.delayed].
   final Future<void> Function(Duration duration)? delayFunction;
 
+  /// Timeout duration to wait for remote ACK per chunk transmission attempt.
+  final Duration ackTimeout;
+
+  /// Maximum transmission attempts (1 initial + up to maxRetries - 1 retries) before failing.
+  final int maxRetries;
+
+  /// Whether the pipeline must await authenticated delivery ACKs from the remote peer.
+  final bool waitForAcks;
+
   /// Validates policy parameters at runtime, throwing [ArgumentError] on invalid values.
   void validate() {
     if (maxInFlightChunks < 1) {
@@ -112,6 +128,20 @@ class ChunkSendingPolicy {
         interChunkDelay,
         'interChunkDelay',
         'interChunkDelay cannot be negative',
+      );
+    }
+    if (ackTimeout.isNegative) {
+      throw ArgumentError.value(
+        ackTimeout,
+        'ackTimeout',
+        'ackTimeout cannot be negative',
+      );
+    }
+    if (maxRetries < 0) {
+      throw ArgumentError.value(
+        maxRetries,
+        'maxRetries',
+        'maxRetries cannot be negative',
       );
     }
     if (maxChunksPerSecond != null) {
@@ -337,6 +367,8 @@ class ChunkSendingPipeline {
     FileTransferCancellationToken? cancellationToken,
     ChunkProgressCallback? onProgress,
     bool throwOnError = true,
+    ChunkAckTracker? ackTracker,
+    ChunkAckService? ackService,
   }) async {
     final effectivePolicy = policy ?? _defaultPolicy;
     effectivePolicy.validate();
@@ -371,6 +403,12 @@ class ChunkSendingPipeline {
 
     void checkInFlightFailure() {
       if (inFlightError != null) {
+        if (inFlightError is ChunkSendingException) {
+          throw inFlightError!;
+        }
+        if (inFlightError is ChunkAckException) {
+          throw inFlightError!;
+        }
         throw ChunkSendFailureException(
           'Transport threw exception during local handoff of chunk $failedInFlightChunkIndex: $inFlightError',
           chunkIndex: failedInFlightChunkIndex,
@@ -474,7 +512,8 @@ class ChunkSendingPipeline {
           success = await inFlight.future;
         } catch (e) {
           await drainInFlightSends();
-          if (e is ChunkSendFailureException) rethrow;
+          if (e is ChunkSendingException) rethrow;
+          if (e is ChunkAckException) rethrow;
           throw ChunkSendFailureException(
             'Transport threw exception during local handoff of chunk ${inFlight.chunkIndex}: $e',
             chunkIndex: inFlight.chunkIndex,
@@ -568,25 +607,94 @@ class ChunkSendingPipeline {
           }
         }
 
-        // E. Serialized chunk encryption
-        final envelope = await _cryptoService.encryptChunk(
-          session: session,
-          transferId: transfer.transferId,
-          originId: localDeviceId,
-          destinationId: transfer.peerId,
-          chunkIndex: chunkIndex,
-          totalChunks: transfer.totalChunks,
-          offset: expectedOffset,
-          plaintext: chunk,
-          chunkLength: expectedLength,
-        );
-
-        checkInFlightFailure();
-
-        // F. Hand off chunk to transport sender
+        // E. Chunk sending & optional ACK awaiting
         Future<bool> sendFuture;
-        try {
-          sendFuture = transportSender.sendChunk(envelope);
+        if (ackTracker != null || effectivePolicy.waitForAcks) {
+          Future<bool> executeSend() async {
+            var attempts = 0;
+            while (true) {
+              attempts++;
+              if (cancellationToken != null && cancellationToken.isCancelled) {
+                throw ChunkSendCancelledException(
+                  'Transfer ${transfer.transferId} cancelled before sending chunk $chunkIndex: ${cancellationToken.reason ?? "no reason specified"}',
+                );
+              }
+
+              final envelope = await _cryptoService.encryptChunk(
+                session: session,
+                transferId: transfer.transferId,
+                originId: localDeviceId,
+                destinationId: transfer.peerId,
+                chunkIndex: chunkIndex,
+                totalChunks: transfer.totalChunks,
+                offset: expectedOffset,
+                plaintext: chunk,
+                chunkLength: expectedLength,
+              );
+
+              Future<ChunkAcknowledgment>? ackFuture;
+              if (ackTracker != null) {
+                ackFuture = ackTracker.waitForAck(
+                  transferId: transfer.transferId,
+                  chunkIndex: chunkIndex,
+                  timeout: effectivePolicy.ackTimeout,
+                  cancellationToken: cancellationToken,
+                );
+              }
+
+              final handedOff = await transportSender.sendChunk(envelope);
+              if (!handedOff) {
+                if (ackTracker != null) {
+                  ackTracker.cancelPending(transfer.transferId, chunkIndex);
+                }
+                return false;
+              }
+
+              if (ackTracker == null && !effectivePolicy.waitForAcks) {
+                return true;
+              }
+
+              try {
+                final ack = await ackFuture!;
+
+                if (ack.isNack) {
+                  throw ChunkNackReceivedException(
+                    'Remote peer NACKed chunk $chunkIndex: ${ack.nackReason?.wireCode}',
+                    transferId: transfer.transferId,
+                    chunkIndex: chunkIndex,
+                    reason: ack.nackReason ?? ChunkNackReason.storageFailure,
+                  );
+                }
+
+                if (ackService != null) {
+                  await ackService.processReceivedAck(
+                    ack: ack,
+                    session: session,
+                  );
+                } else if (database != null) {
+                  await database!.markChunkReceived(
+                    transfer.transferId,
+                    chunkIndex,
+                    status: 'acked',
+                  );
+                }
+
+                return true;
+              } on TimeoutException {
+                if (attempts >= effectivePolicy.maxRetries) {
+                  throw ChunkAckTimeoutException(
+                    'Exhausted $attempts attempts waiting for ACK of chunk $chunkIndex on transfer ${transfer.transferId}',
+                    transferId: transfer.transferId,
+                    chunkIndex: chunkIndex,
+                    attempts: attempts,
+                  );
+                }
+                // Retry loop will re-encrypt chunk with fresh sequence number and resend
+              }
+            }
+          }
+
+          sendFuture = executeSend();
           sendFuture.then(
             (success) {
               if (!success) {
@@ -597,14 +705,44 @@ class ChunkSendingPipeline {
               recordInFlightError(chunkIndex, err as Object);
             },
           );
-        } catch (e) {
-          recordInFlightError(chunkIndex, e);
-          await drainInFlightSends();
-          throw ChunkSendFailureException(
-            'Transport threw exception during local handoff of chunk $chunkIndex: $e',
+        } else {
+          // E. Serialized chunk encryption
+          final envelope = await _cryptoService.encryptChunk(
+            session: session,
+            transferId: transfer.transferId,
+            originId: localDeviceId,
+            destinationId: transfer.peerId,
             chunkIndex: chunkIndex,
-            cause: e,
+            totalChunks: transfer.totalChunks,
+            offset: expectedOffset,
+            plaintext: chunk,
+            chunkLength: expectedLength,
           );
+
+          checkInFlightFailure();
+
+          // F. Hand off chunk to transport sender
+          try {
+            sendFuture = transportSender.sendChunk(envelope);
+            sendFuture.then(
+              (success) {
+                if (!success) {
+                  recordInFlightRejection(chunkIndex);
+                }
+              },
+              onError: (err) {
+                recordInFlightError(chunkIndex, err as Object);
+              },
+            );
+          } catch (e) {
+            recordInFlightError(chunkIndex, e);
+            await drainInFlightSends();
+            throw ChunkSendFailureException(
+              'Transport threw exception during local handoff of chunk $chunkIndex: $e',
+              chunkIndex: chunkIndex,
+              cause: e,
+            );
+          }
         }
 
         inFlightSends.add(
@@ -653,6 +791,18 @@ class ChunkSendingPipeline {
         totalBytes: transfer.fileSize,
         status: currentStatus,
         isCancelled: e is ChunkSendCancelledException,
+        error: e,
+      );
+    } on ChunkAckException catch (e) {
+      await drainInFlightSends();
+      if (throwOnError) rethrow;
+      return ChunkSendingResult(
+        transferId: transfer.transferId,
+        chunksSent: chunksSent,
+        totalChunks: transfer.totalChunks,
+        bytesSent: bytesSent,
+        totalBytes: transfer.fileSize,
+        status: currentStatus,
         error: e,
       );
     } catch (e) {

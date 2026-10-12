@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:meshlink/features/messages/data/database/app_database.dart';
 import 'package:meshlink/features/messages/data/models/ephemeral_session.dart';
 import 'package:meshlink/features/messages/data/repositories/message_repository.dart';
+import 'package:meshlink/features/messages/data/services/chunk_ack_service.dart';
 import 'package:meshlink/features/messages/data/services/file_disk_writer.dart';
 import 'package:meshlink/features/messages/data/services/file_path_service.dart';
 import 'package:meshlink/features/messages/data/services/file_transfer_crypto_service.dart';
@@ -93,6 +94,7 @@ class ChunkReceivingResult {
     this.isDuplicate = false,
     this.isSuccess = true,
     this.error,
+    this.ackEnvelope,
   });
 
   final String transferId;
@@ -107,15 +109,19 @@ class ChunkReceivingResult {
   final bool isSuccess;
   final Object? error;
 
+  /// Optional authenticated encrypted ACK envelope produced upon successful receipt.
+  final EncryptedChunkAckEnvelope? ackEnvelope;
+
   @override
   String toString() =>
-      'ChunkReceivingResult(transferId: $transferId, chunk: $chunkIndex/$totalChunks, offset: $offset, bytes: $bytesWritten, received: $chunksReceived/$totalChunks, status: ${status.name}, isDuplicate: $isDuplicate, isSuccess: $isSuccess, error: $error)';
+      'ChunkReceivingResult(transferId: $transferId, chunk: $chunkIndex/$totalChunks, offset: $offset, bytes: $bytesWritten, received: $chunksReceived/$totalChunks, status: ${status.name}, isDuplicate: $isDuplicate, isSuccess: $isSuccess, error: $error, ack: ${ackEnvelope != null})';
 }
 
 /// Core pipeline service for validating, authenticating, decrypting, and staging
 /// incoming encrypted file chunks.
 ///
 /// Phase 8 Step 11: Chunk Receiving Pipeline & Replay Verification.
+/// Phase 8 Step 12: Incremental Chunk Acknowledgment (ACK/NACK).
 ///
 /// Architectural properties:
 /// 1. Strict Pre-flight Validation: Validates transfer existence, incoming direction,
@@ -132,6 +138,8 @@ class ChunkReceivingResult {
 ///    ONLY AFTER the disk write succeeds.
 /// 7. Non-completion Invariant: Transfers remain in `transferring` status; whole-file
 ///    assembly and SHA-256 integrity verification are deferred to Step 13.
+/// 8. Incremental Acknowledgment: Generates a positive authenticated ACK ONLY AFTER
+///    both disk write and persistence succeed (or on safe duplicate receipt).
 class ChunkReceivingPipeline {
   ChunkReceivingPipeline({
     required this.localDeviceId,
@@ -142,6 +150,8 @@ class ChunkReceivingPipeline {
     FilePathService? pathService,
     FileTransferStateMachine? stateMachine,
     this.requireVerifiedPeer = false,
+    this.ackService,
+    this.ackTransportSender,
   })  : _cryptoService = cryptoService ?? FileTransferCryptoService(),
         _pathService = pathService ?? FilePathService(),
         _stateMachine = stateMachine ?? FileTransferStateMachine.instance,
@@ -158,6 +168,8 @@ class ChunkReceivingPipeline {
   final FilePathService _pathService;
   final FileTransferStateMachine _stateMachine;
   final bool requireVerifiedPeer;
+  final ChunkAckService? ackService;
+  final ChunkAckTransportSender? ackTransportSender;
 
   final Map<String, FileDiskWriter> _activeWriters = <String, FileDiskWriter>{};
 
@@ -244,7 +256,12 @@ class ChunkReceivingPipeline {
     DateTime? packetTimestamp,
     DateTime? now,
     bool throwOnError = true,
+    ChunkAckService? ackService,
+    ChunkAckTransportSender? ackTransportSender,
   }) async {
+    final effectiveAckService = ackService ?? this.ackService;
+    final effectiveAckTransport = ackTransportSender ?? this.ackTransportSender;
+
     try {
       // 1. Structural envelope validation
       try {
@@ -501,6 +518,25 @@ class ChunkReceivingPipeline {
           final allChunks = await database.getFileChunks(envelope.transferId);
           final receivedCount = allChunks.where((c) => c.status == 'received').length;
 
+          EncryptedChunkAckEnvelope? ackEnvelope;
+          if (effectiveAckService != null) {
+            final ack = effectiveAckService.createAck(
+              transferId: envelope.transferId,
+              chunkIndex: envelope.chunkIndex,
+              totalChunks: envelope.totalChunks,
+              destinationId: envelope.originId,
+              session: session,
+              createdAt: now ?? DateTime.now().toUtc(),
+            );
+            ackEnvelope = await effectiveAckService.encryptAck(
+              ack: ack,
+              session: session,
+            );
+            if (effectiveAckTransport != null) {
+              await effectiveAckTransport.sendAck(ackEnvelope);
+            }
+          }
+
           return ChunkReceivingResult(
             transferId: envelope.transferId,
             chunkIndex: envelope.chunkIndex,
@@ -514,6 +550,7 @@ class ChunkReceivingPipeline {
                 : currentStatus,
             isDuplicate: true,
             isSuccess: true,
+            ackEnvelope: ackEnvelope,
           );
         } else {
           throw ChunkContentConflictException(
@@ -555,7 +592,26 @@ class ChunkReceivingPipeline {
       final allChunks = await database.getFileChunks(envelope.transferId);
       final receivedCount = allChunks.where((c) => c.status == 'received').length;
 
-      // Note: In Step 11, the transfer is NEVER marked completed.
+      EncryptedChunkAckEnvelope? ackEnvelope;
+      if (effectiveAckService != null) {
+        final ack = effectiveAckService.createAck(
+          transferId: envelope.transferId,
+          chunkIndex: envelope.chunkIndex,
+          totalChunks: envelope.totalChunks,
+          destinationId: envelope.originId,
+          session: session,
+          createdAt: now ?? DateTime.now().toUtc(),
+        );
+        ackEnvelope = await effectiveAckService.encryptAck(
+          ack: ack,
+          session: session,
+        );
+        if (effectiveAckTransport != null) {
+          await effectiveAckTransport.sendAck(ackEnvelope);
+        }
+      }
+
+      // Note: In Step 11 & 12, the transfer is NEVER marked completed.
       // Whole-file assembly and hash verification belong strictly to Step 13.
       return ChunkReceivingResult(
         transferId: envelope.transferId,
@@ -568,6 +624,7 @@ class ChunkReceivingPipeline {
         status: FileTransferStatus.transferring,
         isDuplicate: false,
         isSuccess: true,
+        ackEnvelope: ackEnvelope,
       );
     } on ChunkReceivingException catch (e) {
       if (throwOnError) rethrow;
