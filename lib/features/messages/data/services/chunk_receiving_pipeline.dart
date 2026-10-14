@@ -19,9 +19,12 @@ export 'package:meshlink/features/messages/data/models/encrypted_file_chunk_enve
 
 /// Base exception class for chunk receiving errors.
 abstract class ChunkReceivingException implements Exception {
-  const ChunkReceivingException(this.message, [this.cause]);
+  const ChunkReceivingException(this.message, [this.cause, this.ackEnvelope]);
   final String message;
   final Object? cause;
+
+  /// Optional authenticated encrypted ACK or NACK envelope produced by the pipeline.
+  final EncryptedChunkAckEnvelope? ackEnvelope;
 
   @override
   String toString() => cause != null
@@ -31,32 +34,32 @@ abstract class ChunkReceivingException implements Exception {
 
 /// Thrown when the transfer record does not exist in local persistence.
 class TransferNotFoundException extends ChunkReceivingException {
-  const TransferNotFoundException(super.message, [super.cause]);
+  const TransferNotFoundException(super.message, [super.cause, super.ackEnvelope]);
 }
 
 /// Thrown when attempting to receive a chunk for a transfer in an invalid direction or state.
 class InvalidReceivingStateException extends ChunkReceivingException {
-  const InvalidReceivingStateException(super.message, [super.cause]);
+  const InvalidReceivingStateException(super.message, [super.cause, super.ackEnvelope]);
 }
 
 /// Thrown when the peer fails trust verification or session peer identity does not match.
 class PeerUntrustedReceivingException extends ChunkReceivingException {
-  const PeerUntrustedReceivingException(super.message, [super.cause]);
+  const PeerUntrustedReceivingException(super.message, [super.cause, super.ackEnvelope]);
 }
 
 /// Thrown when session state, ID, epoch, or active lifecycle does not match the envelope.
 class SessionMismatchException extends ChunkReceivingException {
-  const SessionMismatchException(super.message, [super.cause]);
+  const SessionMismatchException(super.message, [super.cause, super.ackEnvelope]);
 }
 
 /// Thrown when chunk index, offset, length, or total chunks violates transfer metadata invariants.
 class ChunkMetadataMismatchException extends ChunkReceivingException {
-  const ChunkMetadataMismatchException(super.message, [super.cause]);
+  const ChunkMetadataMismatchException(super.message, [super.cause, super.ackEnvelope]);
 }
 
 /// Thrown when cryptographic authentication or decryption of the chunk envelope fails.
 class ChunkAuthenticationException extends ChunkReceivingException {
-  const ChunkAuthenticationException(super.message, [super.cause]);
+  const ChunkAuthenticationException(super.message, [super.cause, super.ackEnvelope]);
 }
 
 /// Thrown when a packet is rejected by persistent replay protection (stale, future, or duplicate).
@@ -65,19 +68,20 @@ class ChunkReplayException extends ChunkReceivingException {
     String message, {
     this.validationResult,
     Object? cause,
-  }) : super(message, cause);
+    EncryptedChunkAckEnvelope? ackEnvelope,
+  }) : super(message, cause, ackEnvelope);
 
   final ReplayValidationResult? validationResult;
 }
 
 /// Thrown when duplicate chunk delivery arrives with conflicting content for an already-staged chunk.
 class ChunkContentConflictException extends ChunkReceivingException {
-  const ChunkContentConflictException(super.message, [super.cause]);
+  const ChunkContentConflictException(super.message, [super.cause, super.ackEnvelope]);
 }
 
 /// Thrown when staging file disk writing or initialization fails.
 class ChunkDiskWriteException extends ChunkReceivingException {
-  const ChunkDiskWriteException(super.message, [super.cause]);
+  const ChunkDiskWriteException(super.message, [super.cause, super.ackEnvelope]);
 }
 
 /// Summary result of a chunk receiving operation.
@@ -138,8 +142,13 @@ class ChunkReceivingResult {
 ///    ONLY AFTER the disk write succeeds.
 /// 7. Non-completion Invariant: Transfers remain in `transferring` status; whole-file
 ///    assembly and SHA-256 integrity verification are deferred to Step 13.
-/// 8. Incremental Acknowledgment: Generates a positive authenticated ACK ONLY AFTER
-///    both disk write and persistence succeed (or on safe duplicate receipt).
+/// 8. Incremental Acknowledgment & NACK Transmission: Generates a positive authenticated ACK
+///    ONLY AFTER both disk write and persistence succeed (or on safe duplicate receipt).
+///    For recoverable post-authentication failures (content conflict, storage failure),
+///    constructs and transmits an encrypted NACK via [ChunkAckTransportSender] bound to the
+///    authenticated session without leaking raw errors or internal paths. Pre-authentication
+///    failures (MAC mismatch, untrusted peer, invalid session) strictly fail closed without
+///    producing a NACK.
 class ChunkReceivingPipeline {
   ChunkReceivingPipeline({
     required this.localDeviceId,
@@ -238,6 +247,50 @@ class ChunkReceivingPipeline {
 
     _activeWriters[transfer.transferId] = writer;
     return writer;
+  }
+
+  /// Safely constructs, encrypts, and transmits an authenticated NACK for
+  /// eligible post-authentication failures.
+  ///
+  /// Adheres strictly to security invariants:
+  /// - ONLY invoked after sender authentication, session validation, and replay check.
+  /// - Transmits bounded [ChunkNackReason] code; never raw errors or local paths.
+  /// - Failure in NACK delivery does not mask the primary exception or corrupt state.
+  Future<EncryptedChunkAckEnvelope?> _sendNackIfConfigured({
+    required ChunkAckService? ackService,
+    required ChunkAckTransportSender? ackTransport,
+    required EncryptedFileChunkEnvelope envelope,
+    required EphemeralSession session,
+    required ChunkNackReason reason,
+    DateTime? now,
+  }) async {
+    if (ackService == null) return null;
+    try {
+      final nack = ackService.createNack(
+        transferId: envelope.transferId,
+        chunkIndex: envelope.chunkIndex,
+        totalChunks: envelope.totalChunks,
+        destinationId: envelope.originId,
+        session: session,
+        reason: reason,
+        createdAt: now ?? DateTime.now().toUtc(),
+      );
+      final nackEnvelope = await ackService.encryptAck(
+        ack: nack,
+        session: session,
+      );
+      if (ackTransport != null) {
+        try {
+          await ackTransport.sendAck(nackEnvelope);
+        } catch (_) {
+          // Transport delivery failure must not mask primary failure or corrupt state
+        }
+      }
+      return nackEnvelope;
+    } catch (_) {
+      // NACK generation/encryption failure must not mask primary failure
+      return null;
+    }
   }
 
   /// Receives, authenticates, and stages a single encrypted file chunk envelope.
@@ -553,39 +606,74 @@ class ChunkReceivingPipeline {
             ackEnvelope: ackEnvelope,
           );
         } else {
+          final nackEnvelope = await _sendNackIfConfigured(
+            ackService: effectiveAckService,
+            ackTransport: effectiveAckTransport,
+            envelope: envelope,
+            session: session,
+            reason: ChunkNackReason.contentConflict,
+            now: now,
+          );
           throw ChunkContentConflictException(
             'Conflicting content for already-received chunk ${envelope.chunkIndex} of transfer ${envelope.transferId}. Staged bytes do not match decrypted plaintext.',
+            null,
+            nackEnvelope,
           );
         }
       }
 
       // 11. Safe Disk Write (Bounded random-access write via FileDiskWriter)
-      final writer = await _getOrCreateWriter(transfer);
       try {
+        final writer = await _getOrCreateWriter(transfer);
         await writer.writeAt(offset: envelope.offset, data: plaintext);
       } catch (e) {
         await closeWriter(envelope.transferId);
+        final nackEnvelope = await _sendNackIfConfigured(
+          ackService: effectiveAckService,
+          ackTransport: effectiveAckTransport,
+          envelope: envelope,
+          session: session,
+          reason: ChunkNackReason.storageFailure,
+          now: now,
+        );
         throw ChunkDiskWriteException(
           'Failed to write chunk ${envelope.chunkIndex} to disk: $e',
           e,
+          nackEnvelope,
         );
       }
 
       // 12. Consistent SQLite Persistence (Only updated AFTER write succeeds)
-      await database.markChunkReceived(
-        envelope.transferId,
-        envelope.chunkIndex,
-        status: 'received',
-        receivedAt: now ?? DateTime.now(),
-      );
-
-      // Advance transfer status to transferring if currently in acceptSent or paused
-      if (currentStatus == FileTransferStatus.acceptSent ||
-          currentStatus == FileTransferStatus.paused) {
-        await database.updateFileTransferStatus(
+      try {
+        await database.markChunkReceived(
           envelope.transferId,
-          FileTransferStatus.transferring.name,
-          updatedAt: now ?? DateTime.now(),
+          envelope.chunkIndex,
+          status: 'received',
+          receivedAt: now ?? DateTime.now(),
+        );
+
+        // Advance transfer status to transferring if currently in acceptSent or paused
+        if (currentStatus == FileTransferStatus.acceptSent ||
+            currentStatus == FileTransferStatus.paused) {
+          await database.updateFileTransferStatus(
+            envelope.transferId,
+            FileTransferStatus.transferring.name,
+            updatedAt: now ?? DateTime.now(),
+          );
+        }
+      } catch (e) {
+        final nackEnvelope = await _sendNackIfConfigured(
+          ackService: effectiveAckService,
+          ackTransport: effectiveAckTransport,
+          envelope: envelope,
+          session: session,
+          reason: ChunkNackReason.storageFailure,
+          now: now,
+        );
+        throw ChunkDiskWriteException(
+          'Failed to persist chunk ${envelope.chunkIndex} to database: $e',
+          e,
+          nackEnvelope,
         );
       }
 
@@ -640,6 +728,7 @@ class ChunkReceivingPipeline {
         isDuplicate: false,
         isSuccess: false,
         error: e,
+        ackEnvelope: e.ackEnvelope,
       );
     } catch (e) {
       if (throwOnError) {

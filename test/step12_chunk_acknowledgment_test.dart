@@ -1336,4 +1336,524 @@ void main() {
       );
     });
   });
+
+  // ===========================================================================
+  // Requirement 6: Authenticated Receiver NACK Transmission & Failure Defense
+  // ===========================================================================
+  group('Requirement 6: Authenticated Receiver NACK Transmission & Failure Defense', () {
+    test('6.1a Recoverable authenticated storage failure produces encrypted NACK with correct correlation', () async {
+      final sessions = await establishSession();
+      final badTransferCompanion = FileTransfersTableCompanion.insert(
+        transferId: 'XFER-NACK-STORAGE-001',
+        conversationId: 'CONV-STEP12-001',
+        peerId: 'ML-DEVICE-ALICE',
+        direction: FileTransferDirection.incoming.name,
+        fileName: 'bad_storage.bin',
+        fileSize: BigInt.from(16384),
+        mimeType: 'application/octet-stream',
+        fileHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        localPath: p.join(tempDir.path, 'bad_storage.bin'),
+        stagingPath: 'D:\\unauthorized_path_outside_sandbox\\storage_err.staging',
+        totalChunks: 1,
+        chunkSize: 16384,
+        status: FileTransferStatus.acceptSent.name,
+        createdAt: testNow,
+        updatedAt: testNow,
+      );
+      await bobDb.into(bobDb.fileTransfersTable).insert(badTransferCompanion);
+
+      final chunkEnvelope = await cryptoService.encryptChunk(
+        session: sessions.sessionAlice,
+        transferId: 'XFER-NACK-STORAGE-001',
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        chunkIndex: 0,
+        totalChunks: 1,
+        offset: 0,
+        plaintext: Uint8List(16384),
+        chunkLength: 16384,
+      );
+
+      final transmittedAcks = <EncryptedChunkAckEnvelope>[];
+      final bobAckTransport = FunctionalChunkAckTransportSender((env) async {
+        transmittedAcks.add(env);
+        return true;
+      });
+
+      // 1. throwOnError = true throws ChunkDiskWriteException carrying NACK envelope
+      ChunkDiskWriteException? capturedEx;
+      try {
+        await bobReceivingPipeline.receiveChunk(
+          envelope: chunkEnvelope,
+          session: sessions.sessionBob,
+          ackTransportSender: bobAckTransport,
+        );
+      } on ChunkDiskWriteException catch (e) {
+        capturedEx = e;
+      }
+      expect(capturedEx, isNotNull);
+      expect(capturedEx!.ackEnvelope, isNotNull);
+      expect(transmittedAcks, hasLength(1));
+
+      // Verify NACK is cryptographically authenticated and correlated by Alice
+      final decryptedNack = await aliceAckService.decryptAck(
+        session: sessions.sessionAlice,
+        envelope: transmittedAcks.first,
+      );
+      expect(decryptedNack.isNack, isTrue);
+      expect(decryptedNack.isAck, isFalse);
+      expect(decryptedNack.nackReason, equals(ChunkNackReason.storageFailure));
+      expect(decryptedNack.transferId, equals('XFER-NACK-STORAGE-001'));
+      expect(decryptedNack.chunkIndex, equals(0));
+      expect(decryptedNack.totalChunks, equals(1));
+      expect(decryptedNack.originId, equals('ML-DEVICE-BOB'));
+      expect(decryptedNack.destinationId, equals('ML-DEVICE-ALICE'));
+      expect(decryptedNack.sessionId, equals(sessions.sessionBob.sessionId));
+      expect(decryptedNack.epoch, equals(sessions.sessionBob.epoch));
+    });
+
+    test('6.1b Recoverable authenticated content conflict produces encrypted NACK with contentConflict reason', () async {
+      final sessions = await establishSession();
+      final transfer = await createReceiverTransferRecord(
+        transferId: 'XFER-NACK-CONFLICT-001',
+        fileSize: 32768,
+        chunkSize: 16384,
+        totalChunks: 2,
+      );
+
+      final originalBytes = Uint8List(16384)..fillRange(0, 16384, 0xAA);
+      final conflictingBytes = Uint8List(16384)..fillRange(0, 16384, 0xBB);
+
+      // 1. Stage original chunk 0
+      final env0 = await cryptoService.encryptChunk(
+        session: sessions.sessionAlice,
+        transferId: transfer.transferId,
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        chunkIndex: 0,
+        totalChunks: 2,
+        offset: 0,
+        plaintext: originalBytes,
+      );
+      final result0 = await bobReceivingPipeline.receiveChunk(
+        envelope: env0,
+        session: sessions.sessionBob,
+      );
+      expect(result0.isSuccess, isTrue);
+
+      final transmittedAcks = <EncryptedChunkAckEnvelope>[];
+      final bobAckTransport = FunctionalChunkAckTransportSender((env) async {
+        transmittedAcks.add(env);
+        return true;
+      });
+
+      // 2. Transmit conflicting chunk 0 with fresh sequence number
+      final envConflict = await cryptoService.encryptChunk(
+        session: sessions.sessionAlice,
+        transferId: transfer.transferId,
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        chunkIndex: 0,
+        totalChunks: 2,
+        offset: 0,
+        plaintext: conflictingBytes,
+      );
+
+      ChunkContentConflictException? conflictEx;
+      try {
+        await bobReceivingPipeline.receiveChunk(
+          envelope: envConflict,
+          session: sessions.sessionBob,
+          ackTransportSender: bobAckTransport,
+        );
+      } on ChunkContentConflictException catch (e) {
+        conflictEx = e;
+      }
+      expect(conflictEx, isNotNull);
+      expect(conflictEx!.ackEnvelope, isNotNull);
+      expect(transmittedAcks, hasLength(1));
+
+      // Alice decrypts and validates NACK
+      final decryptedNack = await aliceAckService.decryptAck(
+        session: sessions.sessionAlice,
+        envelope: transmittedAcks.first,
+      );
+      expect(decryptedNack.isNack, isTrue);
+      expect(decryptedNack.nackReason, equals(ChunkNackReason.contentConflict));
+      expect(decryptedNack.transferId, equals(transfer.transferId));
+      expect(decryptedNack.chunkIndex, equals(0));
+    });
+
+    test('6.2 Invalid ciphertext, MAC, peer trust, or session context produces no NACK', () async {
+      final sessions = await establishSession();
+      final transfer = await createReceiverTransferRecord(
+        transferId: 'XFER-NO-NACK-001',
+        fileSize: 16384,
+        chunkSize: 16384,
+        totalChunks: 1,
+      );
+
+      final transmittedAcks = <EncryptedChunkAckEnvelope>[];
+      final bobAckTransport = FunctionalChunkAckTransportSender((env) async {
+        transmittedAcks.add(env);
+        return true;
+      });
+
+      // Case A: Corrupted MAC
+      final validEnvelope = await cryptoService.encryptChunk(
+        session: sessions.sessionAlice,
+        transferId: transfer.transferId,
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        chunkIndex: 0,
+        totalChunks: 1,
+        offset: 0,
+        plaintext: Uint8List(16384),
+      );
+      final corruptedMac = Uint8List.fromList(validEnvelope.mac);
+      corruptedMac[0] ^= 0xFF;
+      final badMacEnvelope = validEnvelope.copyWith(mac: corruptedMac);
+
+      await expectLater(
+        () => bobReceivingPipeline.receiveChunk(
+          envelope: badMacEnvelope,
+          session: sessions.sessionBob,
+          ackTransportSender: bobAckTransport,
+        ),
+        throwsA(isA<ChunkAuthenticationException>()),
+      );
+      expect(transmittedAcks, isEmpty, reason: 'Corrupted MAC must never produce a NACK');
+
+      // Case B: Corrupted Ciphertext
+      final corruptedCiphertext = Uint8List.fromList(validEnvelope.ciphertext);
+      corruptedCiphertext[0] ^= 0xFF;
+      final badCipherEnvelope = validEnvelope.copyWith(ciphertext: corruptedCiphertext);
+
+      await expectLater(
+        () => bobReceivingPipeline.receiveChunk(
+          envelope: badCipherEnvelope,
+          session: sessions.sessionBob,
+          ackTransportSender: bobAckTransport,
+        ),
+        throwsA(isA<ChunkAuthenticationException>()),
+      );
+      expect(transmittedAcks, isEmpty, reason: 'Corrupted ciphertext must never produce a NACK');
+
+      // Case C: Session Mismatch (wrong epoch)
+      final badEpochEnvelope = validEnvelope.copyWith(epoch: sessions.sessionAlice.epoch + 99);
+      await expectLater(
+        () => bobReceivingPipeline.receiveChunk(
+          envelope: badEpochEnvelope,
+          session: sessions.sessionBob,
+          ackTransportSender: bobAckTransport,
+        ),
+        throwsA(isA<SessionMismatchException>()),
+      );
+      expect(transmittedAcks, isEmpty, reason: 'Session mismatch must never produce a NACK');
+
+      // Case D: Peer Trust Compromised
+      await bobRepo.savePeerIdentity(
+        PeerIdentityEntry(
+          peerId: 'ML-DEVICE-ALICE',
+          identityPublicKey: 'mock-identity-key',
+          safetyNumber: '123456',
+          trustStatus: 'compromised',
+          protocolVersion: 2,
+          firstSeenAt: testNow,
+          lastSeenAt: testNow,
+        ),
+      );
+
+      final freshEnvelope = await cryptoService.encryptChunk(
+        session: sessions.sessionAlice,
+        transferId: transfer.transferId,
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        chunkIndex: 0,
+        totalChunks: 1,
+        offset: 0,
+        plaintext: Uint8List(16384),
+      );
+
+      await expectLater(
+        () => bobReceivingPipeline.receiveChunk(
+          envelope: freshEnvelope,
+          session: sessions.sessionBob,
+          ackTransportSender: bobAckTransport,
+        ),
+        throwsA(isA<PeerUntrustedReceivingException>()),
+      );
+      expect(transmittedAcks, isEmpty, reason: 'Compromised peer must never produce a NACK');
+    });
+
+    test('6.3 Disk/database failure never produces a positive ACK', () async {
+      final sessions = await establishSession();
+      final badTransferCompanion = FileTransfersTableCompanion.insert(
+        transferId: 'XFER-NEVER-ACK-001',
+        conversationId: 'CONV-STEP12-001',
+        peerId: 'ML-DEVICE-ALICE',
+        direction: FileTransferDirection.incoming.name,
+        fileName: 'never_ack.bin',
+        fileSize: BigInt.from(16384),
+        mimeType: 'application/octet-stream',
+        fileHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        localPath: p.join(tempDir.path, 'never_ack.bin'),
+        stagingPath: 'D:\\unauthorized_path_outside_sandbox\\never_ack.staging',
+        totalChunks: 1,
+        chunkSize: 16384,
+        status: FileTransferStatus.acceptSent.name,
+        createdAt: testNow,
+        updatedAt: testNow,
+      );
+      await bobDb.into(bobDb.fileTransfersTable).insert(badTransferCompanion);
+
+      final transmittedAcks = <EncryptedChunkAckEnvelope>[];
+      final bobAckTransport = FunctionalChunkAckTransportSender((env) async {
+        transmittedAcks.add(env);
+        return true;
+      });
+
+      final chunkEnvelope = await cryptoService.encryptChunk(
+        session: sessions.sessionAlice,
+        transferId: 'XFER-NEVER-ACK-001',
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        chunkIndex: 0,
+        totalChunks: 1,
+        offset: 0,
+        plaintext: Uint8List(16384),
+      );
+
+      final result = await bobReceivingPipeline.receiveChunk(
+        envelope: chunkEnvelope,
+        session: sessions.sessionBob,
+        ackTransportSender: bobAckTransport,
+        throwOnError: false,
+      );
+
+      expect(result.isSuccess, isFalse);
+      expect(result.error, isA<ChunkDiskWriteException>());
+      expect(transmittedAcks, hasLength(1));
+      expect(transmittedAcks.first.isNack, isTrue);
+      expect(transmittedAcks.first.isAck, isFalse);
+
+      final chunkInDb = await bobDb.getFileChunk('XFER-NEVER-ACK-001', 0);
+      expect(chunkInDb, isNull);
+    });
+
+    test('6.4 NACK transmission failure does not falsely update chunk progress', () async {
+      final sessions = await establishSession();
+      final badTransferCompanion = FileTransfersTableCompanion.insert(
+        transferId: 'XFER-TRANSPORT-FAIL-001',
+        conversationId: 'CONV-STEP12-001',
+        peerId: 'ML-DEVICE-ALICE',
+        direction: FileTransferDirection.incoming.name,
+        fileName: 'transport_fail.bin',
+        fileSize: BigInt.from(16384),
+        mimeType: 'application/octet-stream',
+        fileHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        localPath: p.join(tempDir.path, 'transport_fail.bin'),
+        stagingPath: 'D:\\unauthorized_path_outside_sandbox\\bad.staging',
+        totalChunks: 1,
+        chunkSize: 16384,
+        status: FileTransferStatus.acceptSent.name,
+        createdAt: testNow,
+        updatedAt: testNow,
+      );
+      await bobDb.into(bobDb.fileTransfersTable).insert(badTransferCompanion);
+
+      // Faulty transport that throws on sendAck
+      final failingTransport = FunctionalChunkAckTransportSender((env) async {
+        throw Exception('Simulated socket write failure');
+      });
+
+      final chunkEnvelope = await cryptoService.encryptChunk(
+        session: sessions.sessionAlice,
+        transferId: 'XFER-TRANSPORT-FAIL-001',
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        chunkIndex: 0,
+        totalChunks: 1,
+        offset: 0,
+        plaintext: Uint8List(16384),
+      );
+
+      // Must throw original primary error without unhandled transport crash
+      await expectLater(
+        () => bobReceivingPipeline.receiveChunk(
+          envelope: chunkEnvelope,
+          session: sessions.sessionBob,
+          ackTransportSender: failingTransport,
+        ),
+        throwsA(isA<ChunkDiskWriteException>()),
+      );
+
+      // Progress is NOT advanced
+      final allChunks = await bobDb.getFileChunks('XFER-TRANSPORT-FAIL-001');
+      expect(allChunks.where((c) => c.status == 'received'), isEmpty);
+      final transfer = await bobDb.getFileTransfer('XFER-TRANSPORT-FAIL-001');
+      expect(transfer!.status, isNot(equals(FileTransferStatus.completed.name)));
+    });
+
+    test('6.5 Sender authenticates and correlates receiver NACK and aborts transfer', () async {
+      final sessions = await establishSession();
+      final sourceFile = await createTestFile('sender_nack_source.bin', 16384);
+      final senderTransfer = await createSenderTransferRecord(
+        transferId: 'XFER-SENDER-CORRELATE-001',
+        filePath: sourceFile.path,
+        fileSize: 16384,
+        chunkSize: 16384,
+        totalChunks: 1,
+      );
+
+      // Bob's incoming transfer configured with illegal staging path to force storage failure
+      final badReceiverCompanion = FileTransfersTableCompanion.insert(
+        transferId: 'XFER-SENDER-CORRELATE-001',
+        conversationId: 'CONV-STEP12-001',
+        peerId: 'ML-DEVICE-ALICE',
+        direction: FileTransferDirection.incoming.name,
+        fileName: 'sender_nack_source.bin',
+        fileSize: BigInt.from(16384),
+        mimeType: 'application/octet-stream',
+        fileHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        localPath: p.join(tempDir.path, 'sender_nack_source.bin'),
+        stagingPath: 'D:\\unauthorized_path_outside_sandbox\\bad.staging',
+        totalChunks: 1,
+        chunkSize: 16384,
+        status: FileTransferStatus.acceptSent.name,
+        createdAt: testNow,
+        updatedAt: testNow,
+      );
+      await bobDb.into(bobDb.fileTransfersTable).insert(badReceiverCompanion);
+
+      final ackTracker = ChunkAckTracker();
+
+      // Alice's chunk transport hands chunk to Bob, captures Bob's NACK and delivers to Alice
+      final aliceTransport = FunctionalChunkTransportSender((chunkEnvelope) async {
+        EncryptedChunkAckEnvelope? bobNack;
+        final bobTransport = FunctionalChunkAckTransportSender((nackEnv) async {
+          bobNack = nackEnv;
+          return true;
+        });
+
+        try {
+          await bobReceivingPipeline.receiveChunk(
+            envelope: chunkEnvelope,
+            session: sessions.sessionBob,
+            ackTransportSender: bobTransport,
+          );
+        } catch (_) {
+          // Bob throws ChunkDiskWriteException
+        }
+
+        if (bobNack != null) {
+          final decryptedAck = await aliceAckService.decryptAck(
+            session: sessions.sessionAlice,
+            envelope: bobNack!,
+          );
+          ackTracker.onAckReceived(decryptedAck);
+        }
+        return true;
+      });
+
+      await expectLater(
+        () => aliceSendingPipeline.sendTransfer(
+          transfer: senderTransfer,
+          session: sessions.sessionAlice,
+          transportSender: aliceTransport,
+          ackTracker: ackTracker,
+          ackService: aliceAckService,
+          policy: const ChunkSendingPolicy(waitForAcks: true),
+        ),
+        throwsA(
+          isA<ChunkNackReceivedException>().having(
+            (e) => e.reason,
+            'reason',
+            equals(ChunkNackReason.storageFailure),
+          ),
+        ),
+      );
+
+      final senderChunks = await aliceDb.getFileChunks(senderTransfer.transferId);
+      expect(senderChunks.where((c) => c.status == 'acked'), isEmpty);
+    });
+
+    test('6.6 Exact replay remains rejected and valid fresh-sequence retransmission remains idempotent', () async {
+      final sessions = await establishSession();
+      final transfer = await createReceiverTransferRecord(
+        transferId: 'XFER-REPLAY-IDEMPOTENT-001',
+        fileSize: 16384,
+        chunkSize: 16384,
+        totalChunks: 1,
+      );
+
+      final transmittedAcks = <EncryptedChunkAckEnvelope>[];
+      final bobAckTransport = FunctionalChunkAckTransportSender((env) async {
+        transmittedAcks.add(env);
+        return true;
+      });
+
+      final payload = Uint8List(16384)..fillRange(0, 16384, 0x42);
+
+      // 1. Initial valid transmission
+      final env1 = await cryptoService.encryptChunk(
+        session: sessions.sessionAlice,
+        transferId: transfer.transferId,
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        chunkIndex: 0,
+        totalChunks: 1,
+        offset: 0,
+        plaintext: payload,
+      );
+
+      final res1 = await bobReceivingPipeline.receiveChunk(
+        envelope: env1,
+        session: sessions.sessionBob,
+        ackTransportSender: bobAckTransport,
+      );
+      expect(res1.isSuccess, isTrue);
+      expect(res1.isDuplicate, isFalse);
+      expect(transmittedAcks, hasLength(1));
+      expect(transmittedAcks.first.isAck, isTrue);
+
+      // 2. Exact packet replay (same sequence number)
+      await expectLater(
+        () => bobReceivingPipeline.receiveChunk(
+          envelope: env1,
+          session: sessions.sessionBob,
+          ackTransportSender: bobAckTransport,
+        ),
+        throwsA(isA<ChunkReplayException>()),
+      );
+      // No NACK or duplicate ACK transmitted for exact replay!
+      expect(transmittedAcks, hasLength(1));
+
+      // 3. Valid fresh-sequence retransmission (new sequence number, same content)
+      final envRetransmit = await cryptoService.encryptChunk(
+        session: sessions.sessionAlice,
+        transferId: transfer.transferId,
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        chunkIndex: 0,
+        totalChunks: 1,
+        offset: 0,
+        plaintext: payload,
+      );
+
+      final resRetransmit = await bobReceivingPipeline.receiveChunk(
+        envelope: envRetransmit,
+        session: sessions.sessionBob,
+        ackTransportSender: bobAckTransport,
+      );
+      expect(resRetransmit.isSuccess, isTrue);
+      expect(resRetransmit.isDuplicate, isTrue);
+      expect(transmittedAcks, hasLength(2));
+      expect(transmittedAcks.last.isAck, isTrue);
+
+      // Database remains consistent: exactly 1 chunk marked received
+      final allChunks = await bobDb.getFileChunks(transfer.transferId);
+      expect(allChunks.where((c) => c.status == 'received'), hasLength(1));
+    });
+  });
 }
