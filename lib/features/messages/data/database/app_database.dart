@@ -410,6 +410,23 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  /// Update the status and local destination path of a completed file transfer.
+  Future<int> completeFileTransfer(
+    String transferId,
+    String localPath, {
+    DateTime? updatedAt,
+  }) {
+    return (update(fileTransfersTable)
+          ..where((t) => t.transferId.equals(transferId)))
+        .write(
+      FileTransfersTableCompanion(
+        status: const Value('completed'),
+        localPath: Value(localPath),
+        updatedAt: Value(updatedAt ?? DateTime.now()),
+      ),
+    );
+  }
+
   /// Update an existing file transfer record with new values.
   Future<bool> updateFileTransfer(FileTransfersTableCompanion entry) {
     return update(fileTransfersTable).replace(entry);

@@ -11,11 +11,13 @@ import 'package:meshlink/features/messages/data/services/file_path_service.dart'
 import 'package:meshlink/features/messages/data/services/file_transfer_crypto_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_identity_service.dart';
 import 'package:meshlink/features/messages/data/services/replay_protection_service.dart';
+import 'package:meshlink/features/messages/data/services/file_assembly_service.dart';
 import 'package:meshlink/features/messages/domain/models/models.dart';
 import 'package:meshlink/features/messages/domain/services/file_transfer_state_machine.dart';
 import 'package:meshlink/features/messages/providers/messaging_providers.dart';
 
 export 'package:meshlink/features/messages/data/models/encrypted_file_chunk_envelope.dart';
+export 'package:meshlink/features/messages/data/services/file_assembly_service.dart';
 
 /// Base exception class for chunk receiving errors.
 abstract class ChunkReceivingException implements Exception {
@@ -99,6 +101,7 @@ class ChunkReceivingResult {
     this.isSuccess = true,
     this.error,
     this.ackEnvelope,
+    this.assemblyResult,
   });
 
   final String transferId;
@@ -116,9 +119,12 @@ class ChunkReceivingResult {
   /// Optional authenticated encrypted ACK envelope produced upon successful receipt.
   final EncryptedChunkAckEnvelope? ackEnvelope;
 
+  /// Optional [FileAssemblyResult] if whole-file assembly was performed.
+  final FileAssemblyResult? assemblyResult;
+
   @override
   String toString() =>
-      'ChunkReceivingResult(transferId: $transferId, chunk: $chunkIndex/$totalChunks, offset: $offset, bytes: $bytesWritten, received: $chunksReceived/$totalChunks, status: ${status.name}, isDuplicate: $isDuplicate, isSuccess: $isSuccess, error: $error, ack: ${ackEnvelope != null})';
+      'ChunkReceivingResult(transferId: $transferId, chunk: $chunkIndex/$totalChunks, offset: $offset, bytes: $bytesWritten, received: $chunksReceived/$totalChunks, status: ${status.name}, isDuplicate: $isDuplicate, isSuccess: $isSuccess, error: $error, ack: ${ackEnvelope != null}, assembled: ${assemblyResult != null})';
 }
 
 /// Core pipeline service for validating, authenticating, decrypting, and staging
@@ -161,6 +167,7 @@ class ChunkReceivingPipeline {
     this.requireVerifiedPeer = false,
     this.ackService,
     this.ackTransportSender,
+    this.assemblyService,
   })  : _cryptoService = cryptoService ?? FileTransferCryptoService(),
         _pathService = pathService ?? FilePathService(),
         _stateMachine = stateMachine ?? FileTransferStateMachine.instance,
@@ -179,6 +186,7 @@ class ChunkReceivingPipeline {
   final bool requireVerifiedPeer;
   final ChunkAckService? ackService;
   final ChunkAckTransportSender? ackTransportSender;
+  final FileAssemblyService? assemblyService;
 
   final Map<String, FileDiskWriter> _activeWriters = <String, FileDiskWriter>{};
 
@@ -196,6 +204,33 @@ class ChunkReceivingPipeline {
 
   /// Returns active writer for [transferId] if open, or null.
   FileDiskWriter? getActiveWriter(String transferId) => _activeWriters[transferId];
+
+  /// Returns effective [FileAssemblyService].
+  FileAssemblyService get effectiveAssemblyService =>
+      assemblyService ??
+      FileAssemblyService(
+        database: database,
+        pathService: _pathService,
+        stateMachine: _stateMachine,
+      );
+
+  /// Securely assembles the complete file from verified staged chunks, verifies its whole-file
+  /// SHA-256 integrity, places it in the destination directory, and transitions the
+  /// transfer to [FileTransferStatus.completed].
+  Future<FileAssemblyResult> assembleTransfer(
+    String transferId, {
+    FileReplacementPolicy replacementPolicy = FileReplacementPolicy.collisionSafe,
+    String? explicitDestinationPath,
+    DateTime? now,
+  }) async {
+    await closeWriter(transferId);
+    return effectiveAssemblyService.assembleTransfer(
+      transferId: transferId,
+      replacementPolicy: replacementPolicy,
+      explicitDestinationPath: explicitDestinationPath,
+      now: now,
+    );
+  }
 
   /// Closes and releases file handle for [transferId].
   Future<void> closeWriter(String transferId) async {
@@ -302,6 +337,11 @@ class ChunkReceivingPipeline {
   /// - [packetTimestamp]: Optional timestamp of the packet for replay checks.
   /// - [now]: Optional clock reference for deterministic testing.
   /// - [throwOnError]: If true (default), rethrows typed exceptions on error.
+  /// - [autoAssemble]: If true, automatically triggers Step 13 whole-file assembly and
+  ///   transitions transfer to [FileTransferStatus.completed] once the final chunk is received.
+  ///   Defaults to false to preserve strict separation of receiving and assembly phases.
+  /// - [replacementPolicy]: Destination file replacement policy if [autoAssemble] is enabled.
+  /// - [explicitDestinationPath]: Optional explicit target destination path for assembly.
   Future<ChunkReceivingResult> receiveChunk({
     required EncryptedFileChunkEnvelope envelope,
     required EphemeralSession session,
@@ -311,6 +351,9 @@ class ChunkReceivingPipeline {
     bool throwOnError = true,
     ChunkAckService? ackService,
     ChunkAckTransportSender? ackTransportSender,
+    bool autoAssemble = false,
+    FileReplacementPolicy replacementPolicy = FileReplacementPolicy.collisionSafe,
+    String? explicitDestinationPath,
   }) async {
     final effectiveAckService = ackService ?? this.ackService;
     final effectiveAckTransport = ackTransportSender ?? this.ackTransportSender;
@@ -699,8 +742,21 @@ class ChunkReceivingPipeline {
         }
       }
 
-      // Note: In Step 11 & 12, the transfer is NEVER marked completed.
-      // Whole-file assembly and hash verification belong strictly to Step 13.
+      // Whole-file assembly and integrity verification (Step 13)
+      FileAssemblyResult? assemblyResult;
+      var finalStatus = FileTransferStatus.transferring;
+
+      if (autoAssemble && receivedCount == transfer.totalChunks) {
+        await closeWriter(envelope.transferId);
+        assemblyResult = await effectiveAssemblyService.assembleTransfer(
+          transferId: envelope.transferId,
+          replacementPolicy: replacementPolicy,
+          explicitDestinationPath: explicitDestinationPath,
+          now: now,
+        );
+        finalStatus = FileTransferStatus.completed;
+      }
+
       return ChunkReceivingResult(
         transferId: envelope.transferId,
         chunkIndex: envelope.chunkIndex,
@@ -709,10 +765,11 @@ class ChunkReceivingPipeline {
         totalBytes: fileSize,
         chunksReceived: receivedCount,
         totalChunks: transfer.totalChunks,
-        status: FileTransferStatus.transferring,
+        status: finalStatus,
         isDuplicate: false,
         isSuccess: true,
         ackEnvelope: ackEnvelope,
+        assemblyResult: assemblyResult,
       );
     } on ChunkReceivingException catch (e) {
       if (throwOnError) rethrow;
@@ -729,6 +786,21 @@ class ChunkReceivingPipeline {
         isSuccess: false,
         error: e,
         ackEnvelope: e.ackEnvelope,
+      );
+    } on FileAssemblyException catch (e) {
+      if (throwOnError) rethrow;
+      return ChunkReceivingResult(
+        transferId: envelope.transferId,
+        chunkIndex: envelope.chunkIndex,
+        offset: envelope.offset,
+        bytesWritten: 0,
+        totalBytes: 0,
+        chunksReceived: 0,
+        totalChunks: envelope.totalChunks,
+        status: FileTransferStatus.failed,
+        isDuplicate: false,
+        isSuccess: false,
+        error: e,
       );
     } catch (e) {
       if (throwOnError) {
