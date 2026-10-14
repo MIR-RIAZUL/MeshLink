@@ -1304,5 +1304,36 @@ void main() {
       expect(finalSender.status, equals(FileTransferStatus.transferring.name));
       expect(finalReceiver.status, equals(FileTransferStatus.transferring.name));
     });
+
+    test('5.4 Delayed ACK from old session or epoch is rejected', () async {
+      final sessions1 = await establishSession(requestId: 'REQ-OLD');
+      final sessions2 = await establishSession(requestId: 'REQ-NEW');
+      final sourceFile = await createTestFile('old_session_source.bin', 16384);
+      final transfer = await createSenderTransferRecord(
+        filePath: sourceFile.path,
+        fileSize: 16384,
+        chunkSize: 16384,
+        totalChunks: 1,
+        status: FileTransferStatus.transferring,
+      );
+
+      // ACK generated under old session 1
+      final oldAck = bobAckService.createAck(
+        transferId: transfer.transferId,
+        chunkIndex: 0,
+        totalChunks: 1,
+        destinationId: 'ML-DEVICE-ALICE',
+        session: sessions1.sessionBob,
+      );
+
+      // Alice now active in session 2 tries to process old session ACK
+      await expectLater(
+        () => aliceAckService.processReceivedAck(
+          ack: oldAck,
+          session: sessions2.sessionAlice,
+        ),
+        throwsA(isA<AckSessionMismatchException>()),
+      );
+    });
   });
 }
