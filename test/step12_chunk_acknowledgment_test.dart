@@ -1,6 +1,6 @@
 import 'dart:io';
-import 'dart:typed_data';
 
+import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:meshlink/features/messages/data/database/app_database.dart';
@@ -22,6 +22,7 @@ import 'package:path/path.dart' as p;
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+  driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
 
   late Directory tempDir;
 
@@ -387,6 +388,62 @@ void main() {
         throwsA(isA<AckSessionMismatchException>()),
       );
     });
+
+    test('1.5 ACK rejection for unknown transfer, mismatched totalChunks, or out-of-bounds chunk index', () async {
+      final sessions = await establishSession();
+      final sourceFile = await createTestFile('ack_reject.bin', 32768);
+      final transfer = await createSenderTransferRecord(
+        filePath: sourceFile.path,
+        fileSize: 32768,
+        chunkSize: 16384,
+        totalChunks: 2,
+        status: FileTransferStatus.transferring,
+      );
+
+      // Unknown transfer
+      final ackBadXfer = bobAckService.createAck(
+        transferId: 'UNKNOWN-XFER-999',
+        chunkIndex: 0,
+        totalChunks: 2,
+        destinationId: 'ML-DEVICE-ALICE',
+        session: sessions.sessionBob,
+      );
+      await expectLater(
+        () => aliceAckService.processReceivedAck(
+          ack: ackBadXfer,
+          session: sessions.sessionAlice,
+        ),
+        throwsA(isA<AckInvalidTransferException>()),
+      );
+
+      // Out-of-bounds chunk index rejected at domain model level
+      expect(
+        () => bobAckService.createAck(
+          transferId: transfer.transferId,
+          chunkIndex: 5,
+          totalChunks: 2,
+          destinationId: 'ML-DEVICE-ALICE',
+          session: sessions.sessionBob,
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      // Mismatched totalChunks against transfer metadata in database
+      final ackBadTotal = bobAckService.createAck(
+        transferId: transfer.transferId,
+        chunkIndex: 0,
+        totalChunks: 10,
+        destinationId: 'ML-DEVICE-ALICE',
+        session: sessions.sessionBob,
+      );
+      await expectLater(
+        () => aliceAckService.processReceivedAck(
+          ack: ackBadTotal,
+          session: sessions.sessionAlice,
+        ),
+        throwsA(isA<AckMetadataMismatchException>()),
+      );
+    });
   });
 
   group('Requirement 2: Receiver integration & positive ACK generation', () {
@@ -530,6 +587,54 @@ void main() {
       expect(result2.isDuplicate, isTrue);
       expect(result2.ackEnvelope, isNotNull);
       expect(result2.chunksReceived, equals(1)); // No double counting!
+    });
+
+    test('2.4 Receiver disk write failure never produces a successful ACK', () async {
+      final sessions = await establishSession();
+      // Insert transfer with unauthorized staging path
+      final badTransferCompanion = FileTransfersTableCompanion.insert(
+        transferId: 'XFER-BAD-DISK-001',
+        conversationId: 'CONV-STEP12-001',
+        peerId: 'ML-DEVICE-ALICE',
+        direction: FileTransferDirection.incoming.name,
+        fileName: 'bad_disk.bin',
+        fileSize: BigInt.from(16384),
+        mimeType: 'application/octet-stream',
+        fileHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        localPath: p.join(tempDir.path, 'bad_disk.bin'),
+        stagingPath: 'D:\\unauthorized_path_outside_sandbox\\bad.staging',
+        totalChunks: 1,
+        chunkSize: 16384,
+        status: FileTransferStatus.acceptSent.name,
+        createdAt: testNow,
+        updatedAt: testNow,
+      );
+      await bobDb.into(bobDb.fileTransfersTable).insert(badTransferCompanion);
+
+      final plaintext = Uint8List(16384);
+      final chunkEnvelope = await cryptoService.encryptChunk(
+        session: sessions.sessionAlice,
+        transferId: 'XFER-BAD-DISK-001',
+        originId: 'ML-DEVICE-ALICE',
+        destinationId: 'ML-DEVICE-BOB',
+        chunkIndex: 0,
+        totalChunks: 1,
+        offset: 0,
+        plaintext: plaintext,
+        chunkLength: 16384,
+      );
+
+      await expectLater(
+        () => bobReceivingPipeline.receiveChunk(
+          envelope: chunkEnvelope,
+          session: sessions.sessionBob,
+        ),
+        throwsA(isA<ChunkDiskWriteException>()),
+      );
+
+      // Verify no chunk record was marked as received in Bob's DB
+      final chunkInDb = await bobDb.getFileChunk('XFER-BAD-DISK-001', 0);
+      expect(chunkInDb, isNull);
     });
   });
 
@@ -775,6 +880,138 @@ void main() {
           ),
         ),
       );
+    });
+
+    test('3.6 Bounded in-flight window enforces backpressure while waiting for ACKs', () async {
+      final sessions = await establishSession();
+      final sourceFile = await createTestFile('inflight_source.bin', 49152);
+      final senderTransfer = await createSenderTransferRecord(
+        filePath: sourceFile.path,
+        fileSize: 49152,
+        chunkSize: 16384,
+        totalChunks: 3,
+      );
+      await createReceiverTransferRecord(
+        fileSize: 49152,
+        chunkSize: 16384,
+        totalChunks: 3,
+      );
+
+      final ackTracker = ChunkAckTracker();
+      var maxObservedInFlight = 0;
+      var currentInFlight = 0;
+
+      final transport = FunctionalChunkTransportSender((chunkEnvelope) async {
+        currentInFlight++;
+        if (currentInFlight > maxObservedInFlight) {
+          maxObservedInFlight = currentInFlight;
+        }
+
+        final receiveResult = await bobReceivingPipeline.receiveChunk(
+          envelope: chunkEnvelope,
+          session: sessions.sessionBob,
+        );
+
+        if (receiveResult.ackEnvelope != null) {
+          final decryptedAck = await aliceAckService.decryptAck(
+            session: sessions.sessionAlice,
+            envelope: receiveResult.ackEnvelope!,
+          );
+          currentInFlight--;
+          ackTracker.onAckReceived(decryptedAck);
+        }
+        return true;
+      });
+
+      final result = await aliceSendingPipeline.sendTransfer(
+        transfer: senderTransfer,
+        session: sessions.sessionAlice,
+        transportSender: transport,
+        ackTracker: ackTracker,
+        ackService: aliceAckService,
+        policy: const ChunkSendingPolicy(
+          waitForAcks: true,
+          maxInFlightChunks: 1,
+          ackTimeout: Duration(seconds: 2),
+        ),
+      );
+
+      expect(result.isSuccess, isTrue);
+      expect(result.chunksSent, equals(3));
+      expect(maxObservedInFlight, equals(1));
+      expect(await aliceAckService.getAckedChunkCount(senderTransfer.transferId), equals(3));
+    });
+
+    test('3.7 Lost ACK followed by fresh-sequence retransmission and delayed duplicate ACK', () async {
+      final sessions = await establishSession();
+      final sourceFile = await createTestFile('lost_ack_dup.bin', 16384);
+      final senderTransfer = await createSenderTransferRecord(
+        filePath: sourceFile.path,
+        fileSize: 16384,
+        chunkSize: 16384,
+        totalChunks: 1,
+      );
+      await createReceiverTransferRecord(
+        fileSize: 16384,
+        chunkSize: 16384,
+        totalChunks: 1,
+      );
+
+      final ackTracker = ChunkAckTracker();
+      ChunkAcknowledgment? delayedFirstAck;
+      var attempt = 0;
+
+      final transport = FunctionalChunkTransportSender((chunkEnvelope) async {
+        attempt++;
+        final receiveResult = await bobReceivingPipeline.receiveChunk(
+          envelope: chunkEnvelope,
+          session: sessions.sessionBob,
+        );
+
+        if (attempt == 1) {
+          delayedFirstAck = await aliceAckService.decryptAck(
+            session: sessions.sessionAlice,
+            envelope: receiveResult.ackEnvelope!,
+          );
+          return true; // Simulate lost/delayed ACK
+        }
+
+        if (receiveResult.ackEnvelope != null) {
+          final freshAck = await aliceAckService.decryptAck(
+            session: sessions.sessionAlice,
+            envelope: receiveResult.ackEnvelope!,
+          );
+          ackTracker.onAckReceived(freshAck);
+        }
+        return true;
+      });
+
+      final result = await aliceSendingPipeline.sendTransfer(
+        transfer: senderTransfer,
+        session: sessions.sessionAlice,
+        transportSender: transport,
+        ackTracker: ackTracker,
+        ackService: aliceAckService,
+        policy: const ChunkSendingPolicy(
+          waitForAcks: true,
+          ackTimeout: Duration(milliseconds: 100),
+          maxRetries: 3,
+        ),
+      );
+
+      expect(result.isSuccess, isTrue);
+      expect(attempt, equals(2));
+      expect(await aliceAckService.getAckedChunkCount(senderTransfer.transferId), equals(1));
+
+      expect(delayedFirstAck, isNotNull);
+      final delayedAckResult = await aliceAckService.processReceivedAck(
+        ack: delayedFirstAck!,
+        session: sessions.sessionAlice,
+      );
+
+      expect(delayedAckResult.isSuccess, isTrue);
+      expect(delayedAckResult.isDuplicate, isTrue);
+      expect(await aliceAckService.getAckedChunkCount(senderTransfer.transferId), equals(1));
     });
   });
 
