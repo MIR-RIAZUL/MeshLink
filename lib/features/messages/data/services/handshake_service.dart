@@ -213,6 +213,9 @@ class HandshakeService {
     Ed25519? ed25519,
     EphemeralKeyProvider? ephemeralKeyProvider,
     EphemeralSessionService? sessionService,
+    int maxPendingRequests = defaultMaxPendingRequests,
+    Duration pendingRequestExpiration = defaultPendingRequestExpiration,
+    DateTime Function()? clock,
   })  : _identityService = identityService,
         _localId = localId,
         _peerRepository = peerRepository,
@@ -225,7 +228,16 @@ class HandshakeService {
             sessionService ??
             (ephemeralKeyProvider == null
                 ? (sessionService ?? EphemeralSessionService())
-                : StaticEphemeralKeyProvider());
+                : StaticEphemeralKeyProvider()),
+        _maxPendingRequests = maxPendingRequests,
+        _pendingRequestExpiration = pendingRequestExpiration,
+        _clock = clock ?? sessionService?.clock ?? (ephemeralKeyProvider is EphemeralSessionService ? ephemeralKeyProvider.clock : null);
+
+  /// Default capacity bound for concurrent pending handshake requests (64).
+  static const int defaultMaxPendingRequests = 64;
+
+  /// Default expiration horizon for pending handshake requests (10 minutes).
+  static const Duration defaultPendingRequestExpiration = Duration(minutes: 10);
 
   final MeshIdentityService _identityService;
   String _localId;
@@ -233,8 +245,24 @@ class HandshakeService {
   final Ed25519 _ed25519;
   final EphemeralKeyProvider _ephemeralKeyProvider;
   final EphemeralSessionService? _sessionService;
+  final int _maxPendingRequests;
+  final Duration _pendingRequestExpiration;
+  final DateTime Function()? _clock;
 
   final Map<String, HandshakePendingRequest> _pendingRequests = {};
+  final Set<String> _inFlightRequestIds = {};
+
+  /// Maximum allowable concurrent pending handshake requests before new ones are rejected.
+  int get maxPendingRequests => _maxPendingRequests;
+
+  /// Expiration lifetime for pending handshake requests.
+  Duration get pendingRequestExpiration => _pendingRequestExpiration;
+
+  /// Number of currently pending handshake requests.
+  int get pendingRequestsCount => _pendingRequests.length;
+
+  /// Current time provided by the injected clock or system wall-clock.
+  DateTime get _now => _clock != null ? _clock() : DateTime.now();
 
   /// Returns the injected [EphemeralSessionService], if any.
   EphemeralSessionService? get sessionService => _sessionService;
@@ -261,13 +289,38 @@ class HandshakeService {
     String? requestId,
     List<int>? ephemeralPublicKey,
     int? timestamp,
+    DateTime? now,
   }) async {
+    // 1. Perform lazy expiration cleanup before capacity and duplicate checks
+    cleanExpiredPendingRequests(now: now);
+
+    final reqId = requestId ?? generateRequestId();
+    HandshakePacketValidator.validateIdentifier(reqId, 'requestId');
+    HandshakePacketValidator.validateIdentifier(destinationId, 'destinationId');
+
     if (destinationId == _localId) {
       throw const HandshakeException(
         HandshakeErrorCode.invalidRequest,
         'Cannot initiate handshake with self',
       );
     }
+
+    // 2. Reject duplicate request ID immediately
+    if (_pendingRequests.containsKey(reqId) || _inFlightRequestIds.contains(reqId)) {
+      throw HandshakeException(
+        HandshakeErrorCode.invalidRequest,
+        'Duplicate handshake requestId: $reqId',
+      );
+    }
+
+    // 3. Enforce capacity limit synchronously before async operations
+    if (_pendingRequests.length + _inFlightRequestIds.length >= _maxPendingRequests) {
+      throw HandshakeException(
+        HandshakeErrorCode.concurrentHandshake,
+        'Maximum pending handshake requests limit reached ($_maxPendingRequests)',
+      );
+    }
+
     if (_peerRepository != null) {
       final knownPeer = await _peerRepository.getPeerIdentity(destinationId);
       if (knownPeer != null &&
@@ -279,24 +332,31 @@ class HandshakeService {
       }
     }
 
+    // 4. Atomically reserve slot to prevent concurrent race conditions
+    _inFlightRequestIds.add(reqId);
+
     final active = _sessionService?.getSession(destinationId);
+    var rekeyStarted = false;
     if (active != null && !active.isDestroyed) {
       if (!(_sessionService?.isRekeyInProgress(destinationId) ?? false)) {
         final begun = _sessionService?.beginRekey(destinationId) ?? true;
         if (!begun) {
+          _inFlightRequestIds.remove(reqId);
           throw const HandshakeException(
             HandshakeErrorCode.concurrentHandshake,
             'A rekey is already in progress for this peer',
           );
         }
+        rekeyStarted = true;
       }
     } else {
       _sessionService?.setLifecycleState(destinationId, SessionLifecycleState.handshakeInit);
     }
 
     try {
-      final reqId = requestId ?? generateRequestId();
-      final ts = timestamp ?? DateTime.now().millisecondsSinceEpoch;
+      final currentLocalTime = now ?? _now;
+      final ts = timestamp ?? currentLocalTime.millisecondsSinceEpoch;
+      HandshakePacketValidator.validateTimestamp(ts);
 
       final idPubKeyBytes = await _identityService.getIdentityPublicKeyBytes();
       final Uint8List ephPubKeyBytes;
@@ -304,7 +364,7 @@ class HandshakeService {
         ephPubKeyBytes = Uint8List.fromList(ephemeralPublicKey);
       } else if (_sessionService != null) {
         final kp =
-            await _sessionService.generateEphemeralKeyPair(requestId: reqId);
+            await _sessionService.generateEphemeralKeyPair(requestId: reqId, now: now);
         ephPubKeyBytes = Uint8List.fromList(kp.publicKey.bytes);
       } else {
         ephPubKeyBytes =
@@ -335,6 +395,7 @@ class HandshakeService {
         timestamp: ts,
         requestTranscript: transcript,
         requestSignature: signatureBytes,
+        localCreatedAt: currentLocalTime,
       );
       _pendingRequests[reqId] = pending;
 
@@ -349,12 +410,15 @@ class HandshakeService {
         signature: base64UrlEncode(signatureBytes),
       );
     } catch (e) {
-      if (active != null && !active.isDestroyed) {
-        _sessionService?.abortRekey(destinationId);
-      } else {
+      _sessionService?.clearPendingKeyPair(reqId);
+      if (rekeyStarted) {
+        _sessionService?.abortRekey(destinationId, now: now ?? _now);
+      } else if (active == null || active.isDestroyed) {
         _sessionService?.setLifecycleState(destinationId, SessionLifecycleState.noSession);
       }
       rethrow;
+    } finally {
+      _inFlightRequestIds.remove(reqId);
     }
   }
 
@@ -364,6 +428,8 @@ class HandshakeService {
     DateTime? now,
     bool enforceTimestampHorizon = false,
   }) async {
+    cleanExpiredPendingRequests(now: now);
+
     if (request.protocolVersion != 2) {
       throw HandshakeException(
         HandshakeErrorCode.invalidProtocolVersion,
@@ -374,6 +440,7 @@ class HandshakeService {
     HandshakePacketValidator.validateIdentifier(request.requestId, 'requestId');
     HandshakePacketValidator.validateIdentifier(request.originId, 'originId');
     HandshakePacketValidator.validateIdentifier(request.destinationId, 'destinationId');
+
     HandshakePacketValidator.validateTimestamp(
       request.timestamp,
       nowMs: now?.millisecondsSinceEpoch,
@@ -487,31 +554,42 @@ class HandshakeService {
     DateTime? now,
     bool enforceTimestampHorizon = false,
   }) async {
+    cleanExpiredPendingRequests(now: now);
+
+    // 1. Verify the request first before changing rekey state or generating keys
+    await verifyKeyRequest(
+      request,
+      now: now,
+      enforceTimestampHorizon: enforceTimestampHorizon,
+    );
+
     final active = _sessionService?.getSession(request.originId);
+    var rekeyStarted = false;
     if (active != null && !active.isDestroyed) {
       if (!(_sessionService?.isRekeyInProgress(request.originId) ?? false)) {
-        _sessionService?.beginRekey(request.originId);
+        final begun = _sessionService?.beginRekey(request.originId) ?? true;
+        if (!begun) {
+          throw const HandshakeException(
+            HandshakeErrorCode.concurrentHandshake,
+            'A rekey is already in progress for this peer',
+          );
+        }
+        rekeyStarted = true;
       }
     } else {
       _sessionService?.setLifecycleState(request.originId, SessionLifecycleState.handshakeInit);
     }
 
     try {
-      // 1. Verify the request first
-      await verifyKeyRequest(
-        request,
-        now: now,
-        enforceTimestampHorizon: enforceTimestampHorizon,
-      );
-
-      final ts = timestamp ?? DateTime.now().millisecondsSinceEpoch;
+      final currentLocalTime = now ?? _now;
+      final ts = timestamp ?? currentLocalTime.millisecondsSinceEpoch;
       final responderIdBytes = await _identityService.getIdentityPublicKeyBytes();
       final Uint8List responderEphBytes;
       if (ephemeralPublicKey != null) {
         responderEphBytes = Uint8List.fromList(ephemeralPublicKey);
       } else if (_sessionService != null) {
         final kp = await _sessionService
-            .generateEphemeralKeyPair(requestId: request.requestId);
+            .generateEphemeralKeyPair(requestId: request.requestId, now: now);
         responderEphBytes = Uint8List.fromList(kp.publicKey.bytes);
       } else {
         responderEphBytes = await _ephemeralKeyProvider.getEphemeralPublicKey(
@@ -553,9 +631,10 @@ class HandshakeService {
         initiatorEphemeralPublicKey: request.ephemeralPublicKey,
       );
     } catch (e) {
-      if (active != null && !active.isDestroyed) {
-        _sessionService?.abortRekey(request.originId);
-      } else {
+      _sessionService?.clearPendingKeyPair(request.requestId);
+      if (rekeyStarted) {
+        _sessionService?.abortRekey(request.originId, now: now ?? _now);
+      } else if (active == null || active.isDestroyed) {
         _sessionService?.setLifecycleState(request.originId, SessionLifecycleState.noSession);
       }
       rethrow;
@@ -571,6 +650,8 @@ class HandshakeService {
     DateTime? now,
     bool enforceTimestampHorizon = false,
   }) async {
+    final currentLocalTime = now ?? _now;
+
     if (response.protocolVersion != 2) {
       throw HandshakeException(
         HandshakeErrorCode.invalidProtocolVersion,
@@ -590,7 +671,7 @@ class HandshakeService {
     final pending =
         expectedRequest ?? _pendingRequests[response.requestId];
     if (pending == null) {
-      _sessionService?.abortRekey(response.originId);
+      _sessionService?.abortRekey(response.originId, now: currentLocalTime);
       throw HandshakeException(
         HandshakeErrorCode.requestIdMismatch,
         'No pending request found matching requestId ${response.requestId}',
@@ -600,25 +681,26 @@ class HandshakeService {
     if (response.requestId != pending.requestId) {
       _pendingRequests.remove(response.requestId);
       _sessionService?.clearPendingKeyPair(response.requestId);
-      _sessionService?.abortRekey(pending.peerId);
+      _sessionService?.abortRekey(pending.peerId, now: currentLocalTime);
       throw HandshakeException(
         HandshakeErrorCode.requestIdMismatch,
         'Response requestId ${response.requestId} does not match pending ${pending.requestId}',
       );
     }
 
-    if (now != null || enforceTimestampHorizon) {
-      final currentMs = now?.millisecondsSinceEpoch ?? DateTime.now().millisecondsSinceEpoch;
-      if (currentMs - pending.timestamp > 10 * 60 * 1000) {
-        _pendingRequests.remove(response.requestId);
-        _sessionService?.clearPendingKeyPair(response.requestId);
-        _sessionService?.abortRekey(pending.peerId);
-        throw HandshakeException(
-          HandshakeErrorCode.requestExpired,
-          'Pending request ${response.requestId} has expired',
-        );
-      }
+    // Automatic expiration enforcement: checks elapsed time since local creation against _pendingRequestExpiration
+    if (currentLocalTime.difference(pending.localCreatedAt) >= _pendingRequestExpiration) {
+      _pendingRequests.remove(response.requestId);
+      _sessionService?.clearPendingKeyPair(response.requestId);
+      _sessionService?.abortRekey(pending.peerId, now: currentLocalTime);
+      throw HandshakeException(
+        HandshakeErrorCode.requestExpired,
+        'Pending request ${response.requestId} has expired',
+      );
     }
+
+    // Lazy cleanup of other expired requests
+    cleanExpiredPendingRequests(now: currentLocalTime);
 
     try {
       if (response.originId != pending.peerId ||
@@ -732,7 +814,9 @@ class HandshakeService {
         );
       }
 
-      // Remove pending request on successful verification
+      // Remove pending request on successful verification.
+      // NOTE: We do NOT clear the pending keypair here because completeSessionAsInitiator
+      // needs to consume it from _sessionService.
       _pendingRequests.remove(response.requestId);
 
       return HandshakeVerificationResult(
@@ -748,7 +832,7 @@ class HandshakeService {
     } catch (e) {
       _pendingRequests.remove(response.requestId);
       _sessionService?.clearPendingKeyPair(response.requestId);
-      _sessionService?.abortRekey(pending.peerId);
+      _sessionService?.abortRekey(pending.peerId, now: currentLocalTime);
       rethrow;
     }
   }
@@ -857,6 +941,7 @@ class HandshakeService {
   Future<KeyRequestPacket> initiateRekey({
     required String destinationId,
     String? requestId,
+    DateTime? now,
   }) async {
     final session = _sessionService?.getSession(destinationId);
     if (session == null || session.isDestroyed) {
@@ -878,9 +963,10 @@ class HandshakeService {
       return await createKeyRequest(
         destinationId: destinationId,
         requestId: requestId,
+        now: now,
       );
     } catch (e) {
-      _sessionService?.abortRekey(destinationId);
+      _sessionService?.abortRekey(destinationId, now: now ?? _now);
       rethrow;
     }
   }
@@ -903,22 +989,27 @@ class HandshakeService {
     _sessionService?.removeSession(peerId);
   }
 
-  /// Cleans in-memory pending requests older than [maxAge] (default 10 minutes).
+  /// Cleans in-memory pending requests older than [maxAge] (default [_pendingRequestExpiration]).
   void cleanExpiredPendingRequests({
     DateTime? now,
-    Duration maxAge = const Duration(minutes: 10),
+    Duration? maxAge,
   }) {
-    final currentMs = (now ?? DateTime.now()).millisecondsSinceEpoch;
+    final current = now ?? _now;
+    final expiration = maxAge ?? _pendingRequestExpiration;
     final toRemove = <String>[];
     for (final entry in _pendingRequests.entries) {
-      if (currentMs - entry.value.timestamp >= maxAge.inMilliseconds) {
+      if (current.difference(entry.value.localCreatedAt) >= expiration) {
         toRemove.add(entry.key);
       }
     }
     for (final reqId in toRemove) {
-      _pendingRequests.remove(reqId);
+      final pending = _pendingRequests.remove(reqId);
       _sessionService?.clearPendingKeyPair(reqId);
+      if (pending != null) {
+        _sessionService?.abortRekey(pending.peerId, now: current);
+      }
     }
+    _sessionService?.cleanExpiredPendingKeyPairs(now: current, maxAge: expiration);
   }
 
   /// Returns pending request matching [requestId], if any.
@@ -927,7 +1018,10 @@ class HandshakeService {
 
   /// Clears in-memory pending request and ephemeral key state for [requestId].
   void clearPendingRequest(String requestId) {
-    _pendingRequests.remove(requestId);
+    final pending = _pendingRequests.remove(requestId);
     _sessionService?.clearPendingKeyPair(requestId);
+    if (pending != null) {
+      _sessionService?.abortRekey(pending.peerId, now: _now);
+    }
   }
 }

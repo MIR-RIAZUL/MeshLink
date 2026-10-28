@@ -351,7 +351,7 @@ class KeyResponsePacket {
 
 /// In-memory transient state for an ongoing handshake request initiated by this device.
 class HandshakePendingRequest {
-  const HandshakePendingRequest({
+  HandshakePendingRequest({
     required this.requestId,
     required this.peerId,
     required this.localId,
@@ -360,7 +360,8 @@ class HandshakePendingRequest {
     required this.timestamp,
     required this.requestTranscript,
     required this.requestSignature,
-  });
+    DateTime? localCreatedAt,
+  }) : localCreatedAt = localCreatedAt ?? DateTime.now();
 
   final String requestId;
   final String peerId;
@@ -370,6 +371,7 @@ class HandshakePendingRequest {
   final int timestamp;
   final Uint8List requestTranscript;
   final Uint8List requestSignature;
+  final DateTime localCreatedAt;
 }
 
 /// Result of an authenticated handshake verification.

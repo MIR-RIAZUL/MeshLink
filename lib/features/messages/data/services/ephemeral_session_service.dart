@@ -22,17 +22,38 @@ class EphemeralSessionService implements EphemeralKeyProvider {
   EphemeralSessionService({
     X25519? x25519,
     DateTime Function()? clock,
+    int maxPendingKeyPairs = defaultMaxPendingKeyPairs,
+    Duration pendingKeyPairExpiration = defaultPendingKeyPairExpiration,
   })  : _x25519 = x25519 ?? X25519(),
-        _clock = clock;
+        _clock = clock,
+        maxPendingKeyPairs = maxPendingKeyPairs,
+        pendingKeyPairExpiration = pendingKeyPairExpiration;
+
+  /// Default capacity bound for pending ephemeral key pairs (64).
+  static const int defaultMaxPendingKeyPairs = 64;
+
+  /// Default expiration horizon for pending ephemeral key pairs (10 minutes).
+  static const Duration defaultPendingKeyPairExpiration = Duration(minutes: 10);
 
   final X25519 _x25519;
   final DateTime Function()? _clock;
+  final int maxPendingKeyPairs;
+  final Duration pendingKeyPairExpiration;
+
+  /// Optional injected clock function for testing.
+  DateTime Function()? get clock => _clock;
 
   DateTime get _now => _clock != null ? _clock() : DateTime.now();
 
   /// Pending ephemeral key pairs keyed by handshake [requestId] to support
   /// concurrent handshakes without key collision.
   final Map<String, SimpleKeyPairData> _pendingKeyPairs = {};
+
+  /// Local creation timestamps for pending key pairs to enforce expiration.
+  final Map<String, DateTime> _pendingKeyPairTimestamps = {};
+
+  /// Synchronous reservation of in-flight request IDs during async key generation.
+  final Set<String> _inFlightRequestIds = {};
 
   /// Fallback key pair used when getEphemeralPublicKey is called without requestId.
   SimpleKeyPairData? _defaultPendingKeyPair;
@@ -130,20 +151,65 @@ class EphemeralSessionService implements EphemeralKeyProvider {
     }
   }
 
+  /// Cleans expired pending ephemeral key pairs older than [maxAge] (default [pendingKeyPairExpiration]).
+  void cleanExpiredPendingKeyPairs({
+    DateTime? now,
+    Duration? maxAge,
+  }) {
+    final current = now ?? _now;
+    final expiration = maxAge ?? pendingKeyPairExpiration;
+    final toRemove = <String>[];
+    for (final entry in _pendingKeyPairTimestamps.entries) {
+      if (current.difference(entry.value) >= expiration) {
+        toRemove.add(entry.key);
+      }
+    }
+    for (final reqId in toRemove) {
+      _pendingKeyPairs.remove(reqId);
+      _pendingKeyPairTimestamps.remove(reqId);
+    }
+  }
+
   /// Generates a fresh X25519 ephemeral key pair for a handshake.
   ///
   /// The key pair is associated with [requestId] so concurrent handshakes
   /// do not overwrite each other's ephemeral private keys.
-  Future<SimpleKeyPairData> generateEphemeralKeyPair({String? requestId}) async {
-    final keyPair = await _x25519.newKeyPair();
-    final extracted = await keyPair.extract();
+  Future<SimpleKeyPairData> generateEphemeralKeyPair({
+    String? requestId,
+    DateTime? now,
+  }) async {
+    cleanExpiredPendingKeyPairs(now: now);
 
     if (requestId != null) {
-      _pendingKeyPairs[requestId] = extracted;
-    } else {
-      _defaultPendingKeyPair = extracted;
+      if (_pendingKeyPairs.containsKey(requestId) || _inFlightRequestIds.contains(requestId)) {
+        throw EphemeralSessionException(
+          'Duplicate ephemeral key pair requestId: $requestId',
+        );
+      }
+      if (_pendingKeyPairs.length + _inFlightRequestIds.length >= maxPendingKeyPairs) {
+        throw EphemeralSessionException(
+          'Maximum pending ephemeral key pairs limit reached ($maxPendingKeyPairs)',
+        );
+      }
+      _inFlightRequestIds.add(requestId);
     }
-    return extracted;
+
+    try {
+      final keyPair = await _x25519.newKeyPair();
+      final extracted = await keyPair.extract();
+
+      if (requestId != null) {
+        _pendingKeyPairs[requestId] = extracted;
+        _pendingKeyPairTimestamps[requestId] = now ?? _now;
+      } else {
+        _defaultPendingKeyPair = extracted;
+      }
+      return extracted;
+    } finally {
+      if (requestId != null) {
+        _inFlightRequestIds.remove(requestId);
+      }
+    }
   }
 
   /// Returns the ephemeral public key bytes for inclusion in handshake packets.
@@ -152,6 +218,7 @@ class EphemeralSessionService implements EphemeralKeyProvider {
   /// a pending key pair, its public key is returned; otherwise a fresh key pair is created.
   @override
   Future<Uint8List> getEphemeralPublicKey({String? requestId}) async {
+    cleanExpiredPendingKeyPairs();
     if (requestId != null) {
       final existing = _pendingKeyPairs[requestId];
       if (existing != null) {
@@ -176,6 +243,8 @@ class EphemeralSessionService implements EphemeralKeyProvider {
   /// Clears pending ephemeral key material for [requestId] (e.g. on handshake failure or timeout).
   void clearPendingKeyPair(String requestId) {
     _pendingKeyPairs.remove(requestId);
+    _pendingKeyPairTimestamps.remove(requestId);
+    _inFlightRequestIds.remove(requestId);
   }
 
   /// Returns the number of currently pending ephemeral key pairs.
@@ -227,6 +296,7 @@ class EphemeralSessionService implements EphemeralKeyProvider {
     }
 
     // 2. Retrieve and consume local ephemeral key pair
+    _pendingKeyPairTimestamps.remove(requestId);
     final kp = localKeyPair ??
         _pendingKeyPairs.remove(requestId) ??
         _defaultPendingKeyPair;
