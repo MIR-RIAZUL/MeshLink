@@ -542,15 +542,37 @@ class FileAssemblyService {
 
     // 9. Atomic SQLite Persistence to Completed
     final effectiveNow = now ?? DateTime.now();
-    final rowsUpdated = await database.completeFileTransfer(
-      transferId,
-      targetDestinationPath,
-      updatedAt: effectiveNow,
-    );
+    final int rowsUpdated;
+    try {
+      rowsUpdated = await database.completeFileTransfer(
+        transferId,
+        targetDestinationPath,
+        updatedAt: effectiveNow,
+      );
+    } catch (e) {
+      if (await destFile.exists()) {
+        try {
+          await destFile.delete();
+        } catch (_) {
+          // Requirement D.5: Cleanup failure must not mask primary error
+        }
+      }
+      throw AssemblyPersistenceException(
+        'Failed to record completed state for transfer "$transferId" in database: $e',
+        cause: e,
+      );
+    }
 
     if (rowsUpdated == 0) {
+      if (await destFile.exists()) {
+        try {
+          await destFile.delete();
+        } catch (_) {
+          // Requirement D.5: Cleanup failure must not mask primary error
+        }
+      }
       throw AssemblyPersistenceException(
-        'Failed to record completed state for transfer "$transferId" in database.',
+        'Failed to record completed state for transfer "$transferId" in database. Transfer may have been cancelled, failed, or completed concurrently.',
       );
     }
 

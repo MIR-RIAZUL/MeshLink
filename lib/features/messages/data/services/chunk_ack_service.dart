@@ -806,6 +806,24 @@ class ChunkAckService {
   }
 }
 
+class _PendingAckWaiter {
+  _PendingAckWaiter({
+    required this.completer,
+    this.timer,
+    this.sessionId,
+    this.epoch,
+    this.cancellationToken,
+    this.cancelListener,
+  });
+
+  final Completer<ChunkAcknowledgment> completer;
+  final Timer? timer;
+  final String? sessionId;
+  final int? epoch;
+  final FileTransferCancellationToken? cancellationToken;
+  final void Function()? cancelListener;
+}
+
 /// Helper tracking in-flight chunk acknowledgments on the sender side with
 /// correlation, bounded timeouts, retries, and cancellation.
 class ChunkAckTracker {
@@ -817,33 +835,51 @@ class ChunkAckTracker {
   final Duration defaultTimeout;
   final int maxRetries;
 
-  final Map<String, Completer<ChunkAcknowledgment>> _pendingAcks = {};
+  final Map<String, _PendingAckWaiter> _pendingAcks = {};
   final Map<String, ChunkAcknowledgment> _unconsumedAcks = {};
+  final Set<String> _cancelledTransfers = {};
 
   static String _key(String transferId, int chunkIndex) =>
       '$transferId:$chunkIndex';
 
+  /// Whether [transferId] has been explicitly cancelled on this tracker.
+  bool isTransferCancelled(String transferId) =>
+      _cancelledTransfers.contains(transferId);
+
   /// Registers interest in an ACK for [transferId] and [chunkIndex].
   ///
-  /// Returns a Future that completes when the ACK arrives, or throws
-  /// [TimeoutException] after [timeout].
+  /// Returns a Future that completes when the matching ACK arrives, or throws
+  /// [TimeoutException] after [timeout], or [ChunkSendCancelledException] if cancelled.
   Future<ChunkAcknowledgment> waitForAck({
     required String transferId,
     required int chunkIndex,
     Duration? timeout,
     FileTransferCancellationToken? cancellationToken,
+    String? sessionId,
+    int? epoch,
   }) async {
     final key = _key(transferId, chunkIndex);
 
-    // If an ACK for this chunk already arrived prior to registration, consume it immediately.
+    // Fast-path: reject if already cancelled
+    if (_cancelledTransfers.contains(transferId) ||
+        (cancellationToken != null && cancellationToken.isCancelled)) {
+      throw ChunkSendCancelledException(
+        'ACK wait cancelled for chunk $chunkIndex on transfer $transferId: ${cancellationToken?.reason ?? "cancelled"}',
+      );
+    }
+
+    // If an ACK for this chunk already arrived prior to registration, consume it if it matches session/epoch.
     final existing = _unconsumedAcks.remove(key);
     if (existing != null) {
-      return existing;
+      final sessionMatches = sessionId == null || existing.sessionId == sessionId;
+      final epochMatches = epoch == null || existing.epoch == epoch;
+      if (sessionMatches && epochMatches) {
+        return existing;
+      }
+      // Stale or mismatched ACK discarded
     }
 
     final completer = Completer<ChunkAcknowledgment>();
-    _pendingAcks[key] = completer;
-
     final effectiveTimeout = timeout ?? defaultTimeout;
     Timer? timer;
 
@@ -861,9 +897,9 @@ class ChunkAckTracker {
       });
     }
 
-    // Cancellation support
-    void checkCancelled() {
-      if (cancellationToken != null && cancellationToken.isCancelled) {
+    void Function()? cancelListener;
+    if (cancellationToken != null) {
+      cancelListener = () {
         if (!completer.isCompleted) {
           timer?.cancel();
           _pendingAcks.remove(key);
@@ -873,29 +909,60 @@ class ChunkAckTracker {
             ),
           );
         }
-      }
+      };
+      cancellationToken.addListener(cancelListener);
     }
 
-    checkCancelled();
+    _pendingAcks[key] = _PendingAckWaiter(
+      completer: completer,
+      timer: timer,
+      sessionId: sessionId,
+      epoch: epoch,
+      cancellationToken: cancellationToken,
+      cancelListener: cancelListener,
+    );
 
     try {
       return await completer.future;
     } finally {
       timer?.cancel();
+      if (cancellationToken != null && cancelListener != null) {
+        cancellationToken.removeListener(cancelListener);
+      }
       _pendingAcks.remove(key);
     }
   }
 
   /// Delivers an incoming [ChunkAcknowledgment] to any pending listener.
   ///
+  /// Validates session and epoch if expected by the listener.
   /// Returns `true` if an active listener was satisfied.
   bool onAckReceived(ChunkAcknowledgment ack) {
+    if (_cancelledTransfers.contains(ack.transferId)) {
+      return false; // Dropped late ACK for cancelled transfer
+    }
+
     final key = _key(ack.transferId, ack.chunkIndex);
-    final completer = _pendingAcks.remove(key);
-    if (completer != null && !completer.isCompleted) {
-      completer.complete(ack);
+    final waiter = _pendingAcks[key];
+
+    if (waiter != null && !waiter.completer.isCompleted) {
+      // Validate session and epoch correlation (Requirement C.8)
+      if (waiter.sessionId != null && ack.sessionId != waiter.sessionId) {
+        return false;
+      }
+      if (waiter.epoch != null && ack.epoch != waiter.epoch) {
+        return false;
+      }
+
+      _pendingAcks.remove(key);
+      waiter.timer?.cancel();
+      if (waiter.cancellationToken != null && waiter.cancelListener != null) {
+        waiter.cancellationToken!.removeListener(waiter.cancelListener!);
+      }
+      waiter.completer.complete(ack);
       return true;
     }
+
     _unconsumedAcks[key] = ack;
     if (_unconsumedAcks.length > 256) {
       _unconsumedAcks.remove(_unconsumedAcks.keys.first);
@@ -906,8 +973,38 @@ class ChunkAckTracker {
   /// Cancels any pending wait for [transferId] and [chunkIndex].
   void cancelPending(String transferId, int chunkIndex) {
     final key = _key(transferId, chunkIndex);
-    _pendingAcks.remove(key);
+    final waiter = _pendingAcks.remove(key);
+    if (waiter != null) {
+      waiter.timer?.cancel();
+      if (waiter.cancellationToken != null && waiter.cancelListener != null) {
+        waiter.cancellationToken!.removeListener(waiter.cancelListener!);
+      }
+    }
     _unconsumedAcks.remove(key);
+  }
+
+  /// Cancels all pending ACK waits for [transferId] and prevents future late ACKs.
+  void cancelTransfer(String transferId, [String? reason]) {
+    _cancelledTransfers.add(transferId);
+    final prefix = '$transferId:';
+    final keysToCancel =
+        _pendingAcks.keys.where((k) => k.startsWith(prefix)).toList();
+    final error = ChunkSendCancelledException(
+      'ACK wait cancelled for transfer $transferId: ${reason ?? "cancelled"}',
+    );
+    for (final key in keysToCancel) {
+      final waiter = _pendingAcks.remove(key);
+      if (waiter != null) {
+        waiter.timer?.cancel();
+        if (waiter.cancellationToken != null && waiter.cancelListener != null) {
+          waiter.cancellationToken!.removeListener(waiter.cancelListener!);
+        }
+        if (!waiter.completer.isCompleted) {
+          waiter.completer.completeError(error);
+        }
+      }
+    }
+    _unconsumedAcks.removeWhere((k, _) => k.startsWith(prefix));
   }
 
   /// Cancels all pending ACK waits with optional reason.
@@ -915,9 +1012,13 @@ class ChunkAckTracker {
     final error = ChunkSendCancelledException(
       'All pending ACK waits cancelled: ${reason ?? "cancelled"}',
     );
-    for (final completer in _pendingAcks.values) {
-      if (!completer.isCompleted) {
-        completer.completeError(error);
+    for (final waiter in _pendingAcks.values) {
+      waiter.timer?.cancel();
+      if (waiter.cancellationToken != null && waiter.cancelListener != null) {
+        waiter.cancellationToken!.removeListener(waiter.cancelListener!);
+      }
+      if (!waiter.completer.isCompleted) {
+        waiter.completer.completeError(error);
       }
     }
     _pendingAcks.clear();

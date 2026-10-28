@@ -395,14 +395,30 @@ class AppDatabase extends _$AppDatabase {
   }
 
   /// Update the status of a specific file transfer.
+  ///
+  /// Guarantees that terminal states ('completed', 'cancelled', 'failed') cannot
+  /// be accidentally overwritten by late non-terminal operations, and that a
+  /// 'completed' transfer cannot be overwritten by 'cancelled' or 'failed'.
   Future<int> updateFileTransferStatus(
     String transferId,
     String status, {
     DateTime? updatedAt,
   }) {
-    return (update(fileTransfersTable)
-          ..where((t) => t.transferId.equals(transferId)))
-        .write(
+    final query = update(fileTransfersTable)
+      ..where((t) => t.transferId.equals(transferId));
+
+    const terminalStates = ['completed', 'cancelled', 'failed'];
+    if (terminalStates.contains(status)) {
+      if (status != 'completed') {
+        // 'cancelled' or 'failed' cannot overwrite 'completed'
+        query.where((t) => t.status.isNotIn(const ['completed']));
+      }
+    } else {
+      // Non-terminal transitions cannot overwrite any terminal state
+      query.where((t) => t.status.isNotIn(terminalStates));
+    }
+
+    return query.write(
       FileTransfersTableCompanion(
         status: Value(status),
         updatedAt: Value(updatedAt ?? DateTime.now()),
@@ -411,13 +427,18 @@ class AppDatabase extends _$AppDatabase {
   }
 
   /// Update the status and local destination path of a completed file transfer.
+  ///
+  /// Guarantees that completed status cannot overwrite an already terminal transfer
+  /// (e.g. if cancellation or failure won the state transition race).
   Future<int> completeFileTransfer(
     String transferId,
     String localPath, {
     DateTime? updatedAt,
   }) {
     return (update(fileTransfersTable)
-          ..where((t) => t.transferId.equals(transferId)))
+          ..where((t) =>
+              t.transferId.equals(transferId) &
+              t.status.isNotIn(const ['completed', 'cancelled', 'failed'])))
         .write(
       FileTransfersTableCompanion(
         status: const Value('completed'),

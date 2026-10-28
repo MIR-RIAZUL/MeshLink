@@ -47,11 +47,13 @@ class FunctionalChunkTransportSender implements ChunkTransportSender {
 }
 
 /// Token allowing cooperative cancellation of an active chunk sending pipeline.
+/// Token allowing cooperative cancellation of an active chunk sending pipeline.
 class FileTransferCancellationToken {
   FileTransferCancellationToken();
 
   bool _isCancelled = false;
   String? _reason;
+  final List<void Function()> _listeners = [];
 
   /// Whether cancellation has been requested.
   bool get isCancelled => _isCancelled;
@@ -59,10 +61,87 @@ class FileTransferCancellationToken {
   /// Optional descriptive reason for cancellation.
   String? get reason => _reason;
 
+  /// Registers a listener callback invoked when cancellation is requested.
+  /// If already cancelled, the listener is invoked synchronously immediately.
+  void addListener(void Function() listener) {
+    if (_isCancelled) {
+      try {
+        listener();
+      } catch (_) {}
+    } else {
+      _listeners.add(listener);
+    }
+  }
+
+  /// Unregisters a previously registered cancellation listener.
+  void removeListener(void Function() listener) {
+    _listeners.remove(listener);
+  }
+
   /// Requests cancellation with an optional [reason].
+  ///
+  /// This operation is strictly idempotent; subsequent calls are safe no-ops.
   void cancel([String? reason]) {
+    if (_isCancelled) return;
     _isCancelled = true;
     _reason = reason;
+    final copy = List<void Function()>.from(_listeners);
+    for (final listener in copy) {
+      try {
+        listener();
+      } catch (_) {}
+    }
+  }
+}
+
+/// Awaits [duration] while monitoring [token] for prompt cooperative cancellation.
+Future<void> cancellableDelay(
+  Duration duration, {
+  FileTransferCancellationToken? token,
+  Future<void> Function(Duration duration)? delayFunction,
+}) async {
+  if (token != null && token.isCancelled) {
+    throw ChunkSendCancelledException(
+      'Transfer was cancelled before delay: ${token.reason ?? "no reason specified"}',
+    );
+  }
+  if (duration <= Duration.zero) return;
+
+  final completer = Completer<void>();
+  Timer? timer;
+
+  void onCancel() {
+    if (!completer.isCompleted) {
+      timer?.cancel();
+      completer.completeError(
+        ChunkSendCancelledException(
+          'Transfer was cancelled during delay: ${token?.reason ?? "no reason specified"}',
+        ),
+      );
+    }
+  }
+
+  token?.addListener(onCancel);
+
+  if (delayFunction != null) {
+    delayFunction(duration).then((_) {
+      if (!completer.isCompleted) completer.complete();
+    }, onError: (e, st) {
+      if (!completer.isCompleted) completer.completeError(e, st);
+    });
+  } else {
+    timer = Timer(duration, () {
+      if (!completer.isCompleted) completer.complete();
+    });
+  }
+
+  try {
+    await completer.future;
+  } finally {
+    timer?.cancel();
+    if (token != null) {
+      token.removeListener(onCancel);
+    }
   }
 }
 
@@ -73,6 +152,8 @@ class FileTransferCancellationToken {
 /// - [interChunkDelay]: [Duration.zero] (microseconds/milliseconds).
 /// - [maxChunksPerSecond]: null (chunks per second).
 /// - [ackTimeout]: Duration(seconds: 5) (wait duration per ACK).
+/// - [transportTimeout]: Duration(seconds: 15) (wait duration for local transport handoff).
+/// - [retryDelay]: Duration.zero (backoff delay between retries).
 /// - [maxRetries]: 3 (retransmissions before failing).
 /// - [waitForAcks]: false (defaults to false for local handoff; set true for delivery ACK wait).
 ///
@@ -85,6 +166,8 @@ class ChunkSendingPolicy {
     this.maxChunksPerSecond,
     this.delayFunction,
     this.ackTimeout = const Duration(seconds: 5),
+    this.transportTimeout = const Duration(seconds: 15),
+    this.retryDelay = Duration.zero,
     this.maxRetries = 3,
     this.waitForAcks = false,
   }) : assert(maxInFlightChunks >= 1, 'maxInFlightChunks must be at least 1');
@@ -108,6 +191,12 @@ class ChunkSendingPolicy {
 
   /// Timeout duration to wait for remote ACK per chunk transmission attempt.
   final Duration ackTimeout;
+
+  /// Maximum duration to await local transport handoff before timing out.
+  final Duration transportTimeout;
+
+  /// Backoff delay inserted before retransmitting after a transient timeout.
+  final Duration retryDelay;
 
   /// Maximum transmission attempts (1 initial + up to maxRetries - 1 retries) before failing.
   final int maxRetries;
@@ -136,6 +225,20 @@ class ChunkSendingPolicy {
         ackTimeout,
         'ackTimeout',
         'ackTimeout cannot be negative',
+      );
+    }
+    if (transportTimeout.isNegative) {
+      throw ArgumentError.value(
+        transportTimeout,
+        'transportTimeout',
+        'transportTimeout cannot be negative',
+      );
+    }
+    if (retryDelay.isNegative) {
+      throw ArgumentError.value(
+        retryDelay,
+        'retryDelay',
+        'retryDelay cannot be negative',
       );
     }
     if (maxRetries < 0) {
@@ -281,6 +384,11 @@ class PeerUntrustedSendingException extends ChunkSendingException {
   const PeerUntrustedSendingException(super.message, [super.cause]);
 }
 
+/// Thrown when the transfer record does not exist in local persistence.
+class TransferNotFoundSendingException extends ChunkSendingException {
+  const TransferNotFoundSendingException(super.message, [super.cause]);
+}
+
 /// Internal tracked in-flight chunk representation.
 class _InFlightSend {
   _InFlightSend({
@@ -342,11 +450,77 @@ class ChunkSendingPipeline {
   final ChunkSendingPolicy _defaultPolicy;
   final bool requireVerifiedPeer;
 
+  final Map<String, FileTransferCancellationToken> _activeCancellationTokens = {};
+  final Map<String, ChunkAckTracker> _activeAckTrackers = {};
+
   /// Returns the underlying [FileStreamReader] for resource diagnostics in tests.
   FileStreamReader get streamReader => _streamReader;
 
   /// Returns the underlying [FileTransferCryptoService].
   FileTransferCryptoService get cryptoService => _cryptoService;
+
+  /// Whether a transfer is currently active and sending.
+  bool isTransferActive(String transferId) =>
+      _activeCancellationTokens.containsKey(transferId);
+
+  /// Cooperatively cancels an active or queued outgoing transfer.
+  ///
+  /// Signals active in-memory cancellation tokens, halts further chunk scheduling,
+  /// releases pending ACK waiters and timers on [ChunkAckTracker], and persists the
+  /// terminal [FileTransferStatus.cancelled] state to SQLite before returning.
+  ///
+  /// Strictly idempotent: repeated cancellation requests for the same transfer
+  /// succeed safely without error or state corruption.
+  Future<bool> cancelTransfer(String transferId, [String? reason]) async {
+    // 1. Signal active in-memory cancellation token if currently running
+    final activeToken = _activeCancellationTokens[transferId];
+    activeToken?.cancel(reason);
+
+    // 2. Cancel active in-memory ACK waits if tracking
+    final tracker = _activeAckTrackers[transferId];
+    tracker?.cancelTransfer(transferId, reason);
+
+    // 3. Persist terminal status to database if database is configured
+    if (database != null) {
+      final entry = await database!.getFileTransfer(transferId);
+      if (entry == null) {
+        throw TransferNotFoundSendingException(
+          'Cannot cancel transfer: transfer "$transferId" not found in database.',
+        );
+      }
+
+      final currentStatus = FileTransferStatus.fromString(entry.status);
+      if (currentStatus == FileTransferStatus.cancelled) {
+        return true; // Strictly idempotent
+      }
+
+      if (_stateMachine.isTerminal(currentStatus)) {
+        throw InvalidSendingStateException(
+          'Cannot cancel transfer "$transferId": already in terminal status "${currentStatus.name}".',
+        );
+      }
+
+      final transitionResult = _stateMachine.transition(
+        direction: FileTransferDirection.fromString(entry.direction),
+        from: currentStatus,
+        to: FileTransferStatus.cancelled,
+      );
+
+      if (!transitionResult.allowed) {
+        throw InvalidSendingStateException(
+          'Cannot cancel transfer "$transferId": ${transitionResult.error}',
+        );
+      }
+
+      await database!.updateFileTransferStatus(
+        transferId,
+        FileTransferStatus.cancelled.toDbValue(),
+        updatedAt: DateTime.now().toUtc(),
+      );
+    }
+
+    return true;
+  }
 
   /// Validates pre-flight conditions and streams all chunks of [transfer] through
   /// encryption, rate-limiting, and local transport handoff via [transportSender].
@@ -374,6 +548,12 @@ class ChunkSendingPipeline {
   }) async {
     final effectivePolicy = policy ?? _defaultPolicy;
     effectivePolicy.validate();
+
+    final token = cancellationToken ?? FileTransferCancellationToken();
+    _activeCancellationTokens[transfer.transferId] = token;
+    if (ackTracker != null) {
+      _activeAckTrackers[transfer.transferId] = ackTracker;
+    }
 
     var currentStatus = transfer.status;
     var chunksSent = 0;
@@ -439,9 +619,18 @@ class ChunkSendingPipeline {
 
     try {
       // 1. Initial cancellation check
-      if (cancellationToken != null && cancellationToken.isCancelled) {
+      if (token.isCancelled) {
+        if (database != null) {
+          try {
+            await database!.updateFileTransferStatus(
+              transfer.transferId,
+              FileTransferStatus.cancelled.toDbValue(),
+              updatedAt: DateTime.now().toUtc(),
+            );
+          } catch (_) {}
+        }
         throw ChunkSendCancelledException(
-          'Transfer ${transfer.transferId} was cancelled before sending started: ${cancellationToken.reason ?? "no reason specified"}',
+          'Transfer ${transfer.transferId} was cancelled before sending started: ${token.reason ?? "no reason specified"}',
         );
       }
 
@@ -475,9 +664,18 @@ class ChunkSendingPipeline {
 
       // 4. Handle empty file (0 bytes -> 0 chunks)
       if (transfer.fileSize == 0) {
-        if (cancellationToken != null && cancellationToken.isCancelled) {
+        if (token.isCancelled) {
+          if (database != null) {
+            try {
+              await database!.updateFileTransferStatus(
+                transfer.transferId,
+                FileTransferStatus.cancelled.toDbValue(),
+                updatedAt: DateTime.now().toUtc(),
+              );
+            } catch (_) {}
+          }
           throw ChunkSendCancelledException(
-            'Transfer ${transfer.transferId} was cancelled before zero-byte completion: ${cancellationToken.reason ?? "no reason specified"}',
+            'Transfer ${transfer.transferId} was cancelled before zero-byte completion: ${token.reason ?? "no reason specified"}',
           );
         }
 
@@ -547,7 +745,9 @@ class ChunkSendingPipeline {
           checkInFlightFailure();
           success = await inFlight.future;
         } catch (e) {
-          await drainInFlightSends();
+          try {
+            await drainInFlightSends();
+          } catch (_) {}
           if (e is ChunkSendingException) rethrow;
           if (e is ChunkAckException) rethrow;
           throw ChunkSendFailureException(
@@ -558,7 +758,9 @@ class ChunkSendingPipeline {
         }
 
         if (!success) {
-          await drainInFlightSends();
+          try {
+            await drainInFlightSends();
+          } catch (_) {}
           throw ChunkSendFailureException(
             'Transport refused or failed local handoff for chunk ${inFlight.chunkIndex} of transfer ${transfer.transferId}.',
             chunkIndex: inFlight.chunkIndex,
@@ -589,10 +791,12 @@ class ChunkSendingPipeline {
         checkInFlightFailure();
 
         // A. Cooperative cancellation check
-        if (cancellationToken != null && cancellationToken.isCancelled) {
-          await drainInFlightSends();
+        if (token.isCancelled) {
+          try {
+            await drainInFlightSends();
+          } catch (_) {}
           throw ChunkSendCancelledException(
-            'Transfer ${transfer.transferId} cancelled by token: ${cancellationToken.reason ?? "no reason specified"}',
+            'Transfer ${transfer.transferId} cancelled by token: ${token.reason ?? "no reason specified"}',
           );
         }
 
@@ -630,16 +834,21 @@ class ChunkSendingPipeline {
 
         // D. Rate control and pacing (applied between chunks, i.e. chunksProduced > 0)
         if (chunksProduced > 0 && effectivePolicy.effectiveChunkDelay > Duration.zero) {
-          final delayFn = effectivePolicy.delayFunction ?? Future.delayed;
-          await delayFn(effectivePolicy.effectiveChunkDelay);
+          await cancellableDelay(
+            effectivePolicy.effectiveChunkDelay,
+            token: token,
+            delayFunction: effectivePolicy.delayFunction,
+          );
 
           checkInFlightFailure();
 
           // Re-check cancellation after pacing delay
-          if (cancellationToken != null && cancellationToken.isCancelled) {
-            await drainInFlightSends();
+          if (token.isCancelled) {
+            try {
+              await drainInFlightSends();
+            } catch (_) {}
             throw ChunkSendCancelledException(
-              'Transfer ${transfer.transferId} cancelled during pacing delay: ${cancellationToken.reason ?? "no reason specified"}',
+              'Transfer ${transfer.transferId} cancelled during pacing delay: ${token.reason ?? "no reason specified"}',
             );
           }
         }
@@ -651,9 +860,9 @@ class ChunkSendingPipeline {
             var attempts = 0;
             while (true) {
               attempts++;
-              if (cancellationToken != null && cancellationToken.isCancelled) {
+              if (token.isCancelled) {
                 throw ChunkSendCancelledException(
-                  'Transfer ${transfer.transferId} cancelled before sending chunk $chunkIndex: ${cancellationToken.reason ?? "no reason specified"}',
+                  'Transfer ${transfer.transferId} cancelled before sending chunk $chunkIndex: ${token.reason ?? "no reason specified"}',
                 );
               }
 
@@ -675,11 +884,32 @@ class ChunkSendingPipeline {
                   transferId: transfer.transferId,
                   chunkIndex: chunkIndex,
                   timeout: effectivePolicy.ackTimeout,
-                  cancellationToken: cancellationToken,
+                  cancellationToken: token,
+                  sessionId: session.sessionId,
+                  epoch: session.epoch,
+                );
+                // Pre-listen to prevent unhandled async error in zone if cancelled while sendChunk is awaiting
+                ackFuture.ignore();
+              }
+
+              final handedOff = await transportSender
+                  .sendChunk(envelope)
+                  .timeout(effectivePolicy.transportTimeout, onTimeout: () {
+                throw ChunkSendFailureException(
+                  'Transport handoff timed out after ${effectivePolicy.transportTimeout.inSeconds}s for chunk $chunkIndex',
+                  chunkIndex: chunkIndex,
+                );
+              });
+
+              if (token.isCancelled) {
+                if (ackTracker != null) {
+                  ackTracker.cancelPending(transfer.transferId, chunkIndex);
+                }
+                throw ChunkSendCancelledException(
+                  'Transfer ${transfer.transferId} was cancelled: ${token.reason ?? "no reason specified"}',
                 );
               }
 
-              final handedOff = await transportSender.sendChunk(envelope);
               if (!handedOff) {
                 if (ackTracker != null) {
                   ackTracker.cancelPending(transfer.transferId, chunkIndex);
@@ -726,6 +956,14 @@ class ChunkSendingPipeline {
                     attempts: attempts,
                   );
                 }
+                // Bounded retry backoff delay
+                if (effectivePolicy.retryDelay > Duration.zero) {
+                  await cancellableDelay(
+                    effectivePolicy.retryDelay,
+                    token: token,
+                    delayFunction: effectivePolicy.delayFunction,
+                  );
+                }
                 // Retry loop will re-encrypt chunk with fresh sequence number and resend
               }
             }
@@ -760,7 +998,14 @@ class ChunkSendingPipeline {
 
           // F. Hand off chunk to transport sender
           try {
-            sendFuture = transportSender.sendChunk(envelope);
+            sendFuture = transportSender
+                .sendChunk(envelope)
+                .timeout(effectivePolicy.transportTimeout, onTimeout: () {
+              throw ChunkSendFailureException(
+                'Transport handoff timed out after ${effectivePolicy.transportTimeout.inSeconds}s for chunk $chunkIndex',
+                chunkIndex: chunkIndex,
+              );
+            });
             sendFuture.then(
               (success) {
                 if (!success) {
@@ -773,7 +1018,9 @@ class ChunkSendingPipeline {
             );
           } catch (e) {
             recordInFlightError(chunkIndex, e);
-            await drainInFlightSends();
+            try {
+              await drainInFlightSends();
+            } catch (_) {}
             throw ChunkSendFailureException(
               'Transport threw exception during local handoff of chunk $chunkIndex: $e',
               chunkIndex: chunkIndex,
@@ -818,7 +1065,32 @@ class ChunkSendingPipeline {
         status: FileTransferStatus.transferring,
       );
     } on ChunkSendingException catch (e) {
-      await drainInFlightSends();
+      try {
+        await drainInFlightSends();
+      } catch (_) {
+        // Requirement D.5: Cleanup failure must not mask primary error
+      }
+      final targetStatus = e is ChunkSendCancelledException
+          ? FileTransferStatus.cancelled
+          : FileTransferStatus.failed;
+      if (database != null) {
+        try {
+          if (_stateMachine.canTransition(
+            direction: transfer.direction,
+            from: currentStatus,
+            to: targetStatus,
+          )) {
+            if (e is ChunkSendCancelledException || throwOnError) {
+              await database!.updateFileTransferStatus(
+                transfer.transferId,
+                targetStatus.toDbValue(),
+                updatedAt: DateTime.now().toUtc(),
+              );
+              currentStatus = targetStatus;
+            }
+          }
+        } catch (_) {}
+      }
       if (throwOnError) rethrow;
       return ChunkSendingResult(
         transferId: transfer.transferId,
@@ -831,7 +1103,28 @@ class ChunkSendingPipeline {
         error: e,
       );
     } on ChunkAckException catch (e) {
-      await drainInFlightSends();
+      try {
+        await drainInFlightSends();
+      } catch (_) {
+        // Requirement D.5: Cleanup failure must not mask primary error
+      }
+      final targetStatus = FileTransferStatus.failed;
+      if (database != null) {
+        try {
+          if (_stateMachine.canTransition(
+            direction: transfer.direction,
+            from: currentStatus,
+            to: targetStatus,
+          )) {
+            await database!.updateFileTransferStatus(
+              transfer.transferId,
+              targetStatus.toDbValue(),
+              updatedAt: DateTime.now().toUtc(),
+            );
+            currentStatus = targetStatus;
+          }
+        } catch (_) {}
+      }
       if (throwOnError) rethrow;
       return ChunkSendingResult(
         transferId: transfer.transferId,
@@ -843,7 +1136,26 @@ class ChunkSendingPipeline {
         error: e,
       );
     } catch (e) {
-      await drainInFlightSends();
+      try {
+        await drainInFlightSends();
+      } catch (_) {}
+      final targetStatus = FileTransferStatus.failed;
+      if (database != null) {
+        try {
+          if (_stateMachine.canTransition(
+            direction: transfer.direction,
+            from: currentStatus,
+            to: targetStatus,
+          )) {
+            await database!.updateFileTransferStatus(
+              transfer.transferId,
+              targetStatus.toDbValue(),
+              updatedAt: DateTime.now().toUtc(),
+            );
+            currentStatus = targetStatus;
+          }
+        } catch (_) {}
+      }
       if (throwOnError) {
         throw ChunkSendFailureException(
           'Unexpected error in chunk sending pipeline: $e',
@@ -859,6 +1171,9 @@ class ChunkSendingPipeline {
         status: currentStatus,
         error: e,
       );
+    } finally {
+      _activeCancellationTokens.remove(transfer.transferId);
+      _activeAckTrackers.remove(transfer.transferId);
     }
   }
 

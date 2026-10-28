@@ -12,6 +12,8 @@ import 'package:meshlink/features/messages/data/services/file_transfer_crypto_se
 import 'package:meshlink/features/messages/data/services/mesh_identity_service.dart';
 import 'package:meshlink/features/messages/data/services/replay_protection_service.dart';
 import 'package:meshlink/features/messages/data/services/file_assembly_service.dart';
+import 'package:meshlink/features/messages/data/services/chunk_sending_pipeline.dart'
+    show FileTransferCancellationToken;
 import 'package:meshlink/features/messages/domain/models/models.dart';
 import 'package:meshlink/features/messages/domain/services/file_transfer_state_machine.dart';
 import 'package:meshlink/features/messages/providers/messaging_providers.dart';
@@ -42,6 +44,11 @@ class TransferNotFoundException extends ChunkReceivingException {
 /// Thrown when attempting to receive a chunk for a transfer in an invalid direction or state.
 class InvalidReceivingStateException extends ChunkReceivingException {
   const InvalidReceivingStateException(super.message, [super.cause, super.ackEnvelope]);
+}
+
+/// Thrown when a chunk receiving operation or transfer is cancelled.
+class ChunkReceiveCancelledException extends InvalidReceivingStateException {
+  const ChunkReceiveCancelledException(super.message, [super.cause, super.ackEnvelope]);
 }
 
 /// Thrown when the peer fails trust verification or session peer identity does not match.
@@ -99,6 +106,7 @@ class ChunkReceivingResult {
     required this.status,
     this.isDuplicate = false,
     this.isSuccess = true,
+    this.isCancelled = false,
     this.error,
     this.ackEnvelope,
     this.assemblyResult,
@@ -114,6 +122,7 @@ class ChunkReceivingResult {
   final FileTransferStatus status;
   final bool isDuplicate;
   final bool isSuccess;
+  final bool isCancelled;
   final Object? error;
 
   /// Optional authenticated encrypted ACK envelope produced upon successful receipt.
@@ -124,7 +133,7 @@ class ChunkReceivingResult {
 
   @override
   String toString() =>
-      'ChunkReceivingResult(transferId: $transferId, chunk: $chunkIndex/$totalChunks, offset: $offset, bytes: $bytesWritten, received: $chunksReceived/$totalChunks, status: ${status.name}, isDuplicate: $isDuplicate, isSuccess: $isSuccess, error: $error, ack: ${ackEnvelope != null}, assembled: ${assemblyResult != null})';
+      'ChunkReceivingResult(transferId: $transferId, chunk: $chunkIndex/$totalChunks, offset: $offset, bytes: $bytesWritten, received: $chunksReceived/$totalChunks, status: ${status.name}, isDuplicate: $isDuplicate, isSuccess: $isSuccess, isCancelled: $isCancelled, error: $error, ack: ${ackEnvelope != null}, assembled: ${assemblyResult != null})';
 }
 
 /// Core pipeline service for validating, authenticating, decrypting, and staging
@@ -189,6 +198,8 @@ class ChunkReceivingPipeline {
   final FileAssemblyService? assemblyService;
 
   final Map<String, FileDiskWriter> _activeWriters = <String, FileDiskWriter>{};
+  final Set<String> _cancelledTransfers = <String>{};
+  final Map<String, FileTransferCancellationToken> _activeCancellationTokens = <String, FileTransferCancellationToken>{};
 
   /// Returns underlying [FileTransferCryptoService].
   FileTransferCryptoService get cryptoService => _cryptoService;
@@ -204,6 +215,72 @@ class ChunkReceivingPipeline {
 
   /// Returns active writer for [transferId] if open, or null.
   FileDiskWriter? getActiveWriter(String transferId) => _activeWriters[transferId];
+
+  /// Whether a transfer is currently active and receiving.
+  bool isTransferActive(String transferId) => _activeCancellationTokens.containsKey(transferId);
+
+  /// Whether a transfer has been cancelled locally.
+  bool isTransferCancelled(String transferId) => _cancelledTransfers.contains(transferId);
+
+  /// Cooperatively cancels an active or queued incoming transfer.
+  ///
+  /// Signals active in-memory cancellation tokens, safely closes the active staging file writer
+  /// while preserving the staging file for diagnostics/recovery, and persists the terminal
+  /// [FileTransferStatus.cancelled] state to SQLite before returning.
+  ///
+  /// Strictly idempotent: repeated cancellation requests succeed safely without error.
+  Future<bool> cancelTransfer(String transferId, [String? reason]) async {
+    // 1. Mark in-memory cancelled state and cancel token if active
+    _cancelledTransfers.add(transferId);
+    final activeToken = _activeCancellationTokens[transferId];
+    activeToken?.cancel(reason);
+
+    // 2. Safely close active writer file handle without deleting staging data
+    try {
+      await closeWriter(transferId);
+    } catch (_) {
+      // Cleanup failure must not prevent database status update or mask primary errors
+    }
+
+    // 3. Persist terminal status to database
+    final entry = await database.getFileTransfer(transferId);
+    if (entry == null) {
+      throw TransferNotFoundException(
+        'Cannot cancel transfer: transfer "$transferId" not found in database.',
+      );
+    }
+
+    final currentStatus = FileTransferStatus.fromString(entry.status);
+    if (currentStatus == FileTransferStatus.cancelled) {
+      return true; // Strictly idempotent
+    }
+
+    if (_stateMachine.isTerminal(currentStatus)) {
+      throw InvalidReceivingStateException(
+        'Cannot cancel transfer "$transferId": already in terminal status "${currentStatus.name}".',
+      );
+    }
+
+    final transitionResult = _stateMachine.transition(
+      direction: FileTransferDirection.fromString(entry.direction),
+      from: currentStatus,
+      to: FileTransferStatus.cancelled,
+    );
+
+    if (!transitionResult.allowed) {
+      throw InvalidReceivingStateException(
+        'Cannot cancel transfer "$transferId": ${transitionResult.error}',
+      );
+    }
+
+    await database.updateFileTransferStatus(
+      transferId,
+      FileTransferStatus.cancelled.toDbValue(),
+      updatedAt: DateTime.now().toUtc(),
+    );
+
+    return true;
+  }
 
   /// Returns effective [FileAssemblyService].
   FileAssemblyService get effectiveAssemblyService =>
@@ -342,6 +419,7 @@ class ChunkReceivingPipeline {
   ///   Defaults to false to preserve strict separation of receiving and assembly phases.
   /// - [replacementPolicy]: Destination file replacement policy if [autoAssemble] is enabled.
   /// - [explicitDestinationPath]: Optional explicit target destination path for assembly.
+  /// - [cancellationToken]: Optional cancellation token for early cooperative cancellation.
   Future<ChunkReceivingResult> receiveChunk({
     required EncryptedFileChunkEnvelope envelope,
     required EphemeralSession session,
@@ -354,11 +432,24 @@ class ChunkReceivingPipeline {
     bool autoAssemble = false,
     FileReplacementPolicy replacementPolicy = FileReplacementPolicy.collisionSafe,
     String? explicitDestinationPath,
+    FileTransferCancellationToken? cancellationToken,
   }) async {
     final effectiveAckService = ackService ?? this.ackService;
     final effectiveAckTransport = ackTransportSender ?? this.ackTransportSender;
 
+    if (cancellationToken != null) {
+      _activeCancellationTokens[envelope.transferId] = cancellationToken;
+    }
+
     try {
+      // 0. Initial cancellation check
+      if (_cancelledTransfers.contains(envelope.transferId) ||
+          cancellationToken?.isCancelled == true) {
+        throw ChunkReceiveCancelledException(
+          'Cannot receive chunk: transfer ${envelope.transferId} was cancelled: ${cancellationToken?.reason ?? "cancellation requested"}',
+        );
+      }
+
       // 1. Structural envelope validation
       try {
         envelope.validate();
@@ -393,6 +484,12 @@ class ChunkReceivingPipeline {
       };
 
       if (!validReceivingStatuses.contains(currentStatus)) {
+        if (currentStatus == FileTransferStatus.cancelled ||
+            _cancelledTransfers.contains(envelope.transferId)) {
+          throw ChunkReceiveCancelledException(
+            'Cannot receive chunk: transfer ${envelope.transferId} is cancelled.',
+          );
+        }
         throw InvalidReceivingStateException(
           'Cannot receive chunk: transfer ${envelope.transferId} is in status "${currentStatus.name}". Valid statuses: [acceptSent, transferring, paused].',
         );
@@ -666,11 +763,22 @@ class ChunkReceivingPipeline {
       }
 
       // 11. Safe Disk Write (Bounded random-access write via FileDiskWriter)
+      if (_cancelledTransfers.contains(envelope.transferId) ||
+          cancellationToken?.isCancelled == true) {
+        throw ChunkReceiveCancelledException(
+          'Transfer ${envelope.transferId} was cancelled before writing chunk ${envelope.chunkIndex} to disk.',
+        );
+      }
+
       try {
         final writer = await _getOrCreateWriter(transfer);
         await writer.writeAt(offset: envelope.offset, data: plaintext);
       } catch (e) {
-        await closeWriter(envelope.transferId);
+        try {
+          await closeWriter(envelope.transferId);
+        } catch (_) {
+          // Cleanup failure must not mask primary write error
+        }
         final nackEnvelope = await _sendNackIfConfigured(
           ackService: effectiveAckService,
           ackTransport: effectiveAckTransport,
@@ -687,6 +795,13 @@ class ChunkReceivingPipeline {
       }
 
       // 12. Consistent SQLite Persistence (Only updated AFTER write succeeds)
+      if (_cancelledTransfers.contains(envelope.transferId) ||
+          cancellationToken?.isCancelled == true) {
+        throw ChunkReceiveCancelledException(
+          'Transfer ${envelope.transferId} was cancelled before persisting chunk ${envelope.chunkIndex} to database.',
+        );
+      }
+
       try {
         await database.markChunkReceived(
           envelope.transferId,
@@ -747,6 +862,12 @@ class ChunkReceivingPipeline {
       var finalStatus = FileTransferStatus.transferring;
 
       if (autoAssemble && receivedCount == transfer.totalChunks) {
+        if (_cancelledTransfers.contains(envelope.transferId) ||
+            cancellationToken?.isCancelled == true) {
+          throw ChunkReceiveCancelledException(
+            'Transfer ${envelope.transferId} was cancelled before whole-file assembly could begin.',
+          );
+        }
         await closeWriter(envelope.transferId);
         assemblyResult = await effectiveAssemblyService.assembleTransfer(
           transferId: envelope.transferId,
@@ -781,7 +902,10 @@ class ChunkReceivingPipeline {
         totalBytes: 0,
         chunksReceived: 0,
         totalChunks: envelope.totalChunks,
-        status: FileTransferStatus.failed,
+        status: e is ChunkReceiveCancelledException
+            ? FileTransferStatus.cancelled
+            : FileTransferStatus.failed,
+        isCancelled: e is ChunkReceiveCancelledException,
         isDuplicate: false,
         isSuccess: false,
         error: e,
@@ -798,6 +922,7 @@ class ChunkReceivingPipeline {
         chunksReceived: 0,
         totalChunks: envelope.totalChunks,
         status: FileTransferStatus.failed,
+        isCancelled: false,
         isDuplicate: false,
         isSuccess: false,
         error: e,
@@ -815,10 +940,15 @@ class ChunkReceivingPipeline {
         chunksReceived: 0,
         totalChunks: envelope.totalChunks,
         status: FileTransferStatus.failed,
+        isCancelled: false,
         isDuplicate: false,
         isSuccess: false,
         error: e,
       );
+    } finally {
+      if (cancellationToken != null) {
+        _activeCancellationTokens.remove(envelope.transferId);
+      }
     }
   }
 }
