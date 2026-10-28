@@ -8,6 +8,14 @@ import 'package:meshlink/features/messages/data/repositories/message_repository.
 import 'package:meshlink/features/messages/data/services/directional_session_encryption_service.dart';
 import 'package:meshlink/features/messages/data/services/ephemeral_session_service.dart';
 import 'package:meshlink/features/messages/data/services/handshake_service.dart';
+import 'package:meshlink/features/messages/data/services/chunk_ack_service.dart';
+import 'package:meshlink/features/messages/data/services/chunk_receiving_pipeline.dart';
+import 'package:meshlink/features/messages/data/services/chunk_sending_pipeline.dart';
+import 'package:meshlink/features/messages/data/services/file_path_service.dart';
+import 'package:meshlink/features/messages/data/services/file_transfer_crypto_service.dart';
+import 'package:meshlink/features/messages/data/services/file_transfer_negotiation_service.dart';
+import 'package:meshlink/features/messages/data/services/file_transfer_resumption_service.dart';
+import 'package:meshlink/features/messages/data/services/file_transfer_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_identity_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_messaging_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_router.dart';
@@ -73,7 +81,6 @@ final deviceDiscoveryControllerProvider =
       final service = ref.watch(deviceDiscoveryServiceProvider);
       final controller = DeviceDiscoveryController(service);
       controller.initialize();
-      ref.onDispose(() => controller.dispose());
       return controller;
     });
 
@@ -81,13 +88,11 @@ final deviceConnectionControllerProvider =
     ChangeNotifierProvider<DeviceConnectionController>((ref) {
       final service = ref.watch(deviceDiscoveryServiceProvider);
       final controller = DeviceConnectionController(service);
-      ref.onDispose(() => controller.dispose());
       return controller;
     });
 
-final meshMessagingServiceProvider = Provider<MeshMessagingService>((ref) {
+final meshRouterProvider = Provider<MeshRouter>((ref) {
   final discoveryService = ref.watch(deviceDiscoveryServiceProvider);
-  final repository = ref.watch(messageRepositoryProvider);
   final discoveryController = ref.watch(
     deviceDiscoveryControllerProvider.notifier,
   );
@@ -102,6 +107,81 @@ final meshMessagingServiceProvider = Provider<MeshMessagingService>((ref) {
     getConnectedPeers: () => connectionController.connectedDevices,
     replayProtectionService: replayProtectionService,
   );
+  ref.onDispose(() => router.dispose());
+  return router;
+});
+
+final filePathServiceProvider = Provider<FilePathService>((ref) {
+  return FilePathService();
+});
+
+final fileAssemblyServiceProvider = Provider<FileAssemblyService>((ref) {
+  final db = ref.watch(appDatabaseProvider);
+  final pathService = ref.watch(filePathServiceProvider);
+  return FileAssemblyService(
+    database: db,
+    pathService: pathService,
+  );
+});
+
+final fileTransferCryptoServiceProvider =
+    Provider<FileTransferCryptoService>((ref) {
+  final encryptionService =
+      ref.watch(directionalSessionEncryptionServiceProvider);
+  return FileTransferCryptoService(encryptionService: encryptionService);
+});
+
+final fileTransferServiceProvider = Provider<FileTransferService>((ref) {
+  final db = ref.watch(appDatabaseProvider);
+  final repo = ref.watch(messageRepositoryProvider);
+  final router = ref.watch(meshRouterProvider);
+  final sessionService = ref.watch(ephemeralSessionServiceProvider);
+  final discoveryController = ref.watch(
+    deviceDiscoveryControllerProvider.notifier,
+  );
+  final sendingPipeline = ref.watch(chunkSendingPipelineProvider);
+  final receivingPipeline = ref.watch(chunkReceivingPipelineProvider);
+  final ackService = ref.watch(chunkAckServiceProvider);
+  final assemblyService = ref.watch(fileAssemblyServiceProvider);
+  final pathService = ref.watch(filePathServiceProvider);
+  final cryptoService = ref.watch(fileTransferCryptoServiceProvider);
+  final replayService = ref.watch(replayProtectionServiceProvider);
+  final negotiationService = ref.watch(
+    fileTransferNegotiationServiceProvider(
+      discoveryController.localIdentity.id,
+    ),
+  );
+  final resumptionService = ref.watch(fileTransferResumptionServiceProvider);
+
+  final service = FileTransferService(
+    localDeviceId: discoveryController.localIdentity.id,
+    database: db,
+    messageRepository: repo,
+    router: router,
+    sessionService: sessionService,
+    sendingPipeline: sendingPipeline,
+    receivingPipeline: receivingPipeline,
+    ackService: ackService,
+    assemblyService: assemblyService,
+    pathService: pathService,
+    cryptoService: cryptoService,
+    replayProtectionService: replayService,
+    negotiationService: negotiationService,
+    resumptionService: resumptionService,
+  );
+  ref.onDispose(() => service.dispose());
+  return service;
+});
+
+final meshMessagingServiceProvider = Provider<MeshMessagingService>((ref) {
+  final discoveryService = ref.watch(deviceDiscoveryServiceProvider);
+  final repository = ref.watch(messageRepositoryProvider);
+  final discoveryController = ref.watch(
+    deviceDiscoveryControllerProvider.notifier,
+  );
+  final replayProtectionService = ref.watch(replayProtectionServiceProvider);
+  final router = ref.watch(meshRouterProvider);
+  final fileTransferService = ref.watch(fileTransferServiceProvider);
 
   final service = BleMeshMessagingService(
     discoveryService: discoveryService,
@@ -109,6 +189,7 @@ final meshMessagingServiceProvider = Provider<MeshMessagingService>((ref) {
     localId: discoveryController.localIdentity.id,
     router: router,
     replayProtectionService: replayProtectionService,
+    fileTransferService: fileTransferService,
   );
   ref.onDispose(() => service.dispose());
   return service;

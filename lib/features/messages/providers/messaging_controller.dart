@@ -5,7 +5,9 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:meshlink/features/devices/providers/device_connection_controller.dart';
 import 'package:meshlink/features/messages/data/models/mesh_message.dart';
+import 'package:meshlink/features/messages/data/services/file_transfer_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_messaging_service.dart';
+import 'package:meshlink/features/messages/domain/models/models.dart';
 
 class MessagingController extends ChangeNotifier {
   MessagingController({
@@ -110,8 +112,16 @@ class MessagingController extends ChangeNotifier {
     if (hasListeners) notifyListeners();
   }
 
+  @Deprecated('Use transferProgressStream instead. Will be removed in Step 18.')
   Stream<MeshFileTransferProgress> get fileTransferProgress =>
       _service.fileTransferProgress;
+
+  /// Strongly-typed stream of authoritative Phase 8 file transfer progress updates.
+  Stream<FileTransferProgress> get transferProgressStream =>
+      _service.fileTransferProgressStream;
+
+  /// Underlying [FileTransferService], if available.
+  FileTransferService? get fileTransferService => _service.fileTransferService;
 
   Future<void> retryMessage(MeshMessage message) async {
     final peerId = message.receiverId;

@@ -34,6 +34,7 @@ class LocalKeyExchangeDelivery extends RoutedPayloadResult {
   final Map<String, dynamic> payload;
 }
 
+@Deprecated('Legacy v1 file transfer delivery. Superseded by LocalFileChunkDelivery and LocalFileChunkAckDelivery in Phase 8.')
 class FileTransferDelivery extends RoutedPayloadResult {
   const FileTransferDelivery(this.payload);
   final Map<String, dynamic> payload;
@@ -162,6 +163,12 @@ class MeshRouter {
 
   /// Maximum allowed TTL.
   static const int maxTtl = 64;
+
+  /// Canonical wire packet type for Phase 8 encrypted file chunks.
+  static const String fileChunkPacketType = 'file_chunk';
+
+  /// Canonical wire packet type for Phase 8 encrypted chunk acknowledgments.
+  static const String fileAckPacketType = 'file_ack';
 
   /// Maximum allowed individual chunk ciphertext length (128 KB).
   static const int maxChunkLength = 128 * 1024;

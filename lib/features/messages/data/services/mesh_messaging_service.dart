@@ -3,14 +3,20 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:meshlink/features/devices/data/services/device_discovery_service.dart';
+import 'package:meshlink/features/messages/data/database/app_database.dart';
 import 'package:meshlink/features/messages/data/models/mesh_message.dart';
+import 'package:meshlink/features/messages/data/repositories/message_repository.dart';
+import 'package:meshlink/features/messages/data/services/ephemeral_session_service.dart';
+import 'package:meshlink/features/messages/data/services/file_transfer_service.dart';
 import 'package:meshlink/features/messages/data/services/message_storage_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_router.dart';
 import 'package:meshlink/features/messages/data/services/mesh_crypto_service.dart';
 import 'package:meshlink/features/messages/data/services/replay_protection_service.dart';
+import 'package:meshlink/features/messages/domain/models/models.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
+@Deprecated('Use FileTransferProgress from domain/models instead. Will be removed in Step 18.')
 class MeshFileTransferProgress {
   const MeshFileTransferProgress({
     required this.transferId,
@@ -28,10 +34,21 @@ class MeshFileTransferProgress {
 abstract class MeshMessagingService {
   Stream<MeshMessage> get incomingMessages;
   Stream<String> get ackReceived;
+
+  @Deprecated('Use fileTransferProgressStream instead. Will be removed in Step 18.')
   Stream<MeshFileTransferProgress> get fileTransferProgress;
 
+  /// Strongly-typed stream of authoritative Phase 8 file transfer progress updates.
+  Stream<FileTransferProgress> get fileTransferProgressStream;
+
+  /// Underlying [FileTransferService] instance, if configured.
+  FileTransferService? get fileTransferService;
+
+  /// Underlying [MeshRouter] coordinating packet routing.
+  MeshRouter get router;
+
   Future<bool> sendMessage(MeshMessage message);
-  Future<void> sendFile(String peerId, File file);
+  Future<void> sendFile(String peerId, File file, {String? transferId});
   Future<List<MeshMessage>> getMessagesForPeer(String peerId);
   Future<void> retryMessage(MeshMessage message);
   Future<void> flushPendingMessages(String peerId);
@@ -46,6 +63,9 @@ class BleMeshMessagingService implements MeshMessagingService {
     MeshRouter? router,
     MeshCryptoService? cryptoService,
     ReplayProtectionService? replayProtectionService,
+    FileTransferService? fileTransferService,
+    AppDatabase? database,
+    EphemeralSessionService? sessionService,
   })  : _service = discoveryService,
         _storage = storageService,
         _currentLocalId = localId,
@@ -57,6 +77,32 @@ class BleMeshMessagingService implements MeshMessagingService {
               localId: localId,
               replayProtectionService: replayProtectionService,
             ) {
+    if (fileTransferService != null) {
+      _fileTransferService = fileTransferService;
+    } else if (database != null &&
+        sessionService != null &&
+        storageService is MessageRepository) {
+      _fileTransferService = FileTransferService(
+        localDeviceId: localId,
+        database: database,
+        messageRepository: storageService,
+        router: _router,
+        sessionService: sessionService,
+        replayProtectionService: replayProtectionService,
+      );
+    } else {
+      _fileTransferService = null;
+    }
+
+    _fileTransferSub = _fileTransferService?.progressStream.listen((p) {
+      _fileTransferProgressController.add(MeshFileTransferProgress(
+        transferId: p.transferId,
+        fileName: p.fileName,
+        status: p.status.name,
+        progress: p.progressFraction,
+      ));
+    });
+
     _subscription = _service.events.listen(_handleDiscoveryEvent);
   }
 
@@ -65,19 +111,32 @@ class BleMeshMessagingService implements MeshMessagingService {
   final MeshRouter _router;
   final MeshCryptoService _crypto;
   final ReplayProtectionService? _replayProtection;
+  FileTransferService? _fileTransferService;
+  StreamSubscription<FileTransferProgress>? _fileTransferSub;
   String _currentLocalId;
   bool _isFlushing = false;
+
+  @Deprecated('Legacy in-memory chunk buffer from v1. Superseded by ChunkReceivingPipeline.')
   final Map<String, Map<String, dynamic>> _incomingTransfers = {};
 
   final StreamController<MeshFileTransferProgress> _fileTransferProgressController =
       StreamController<MeshFileTransferProgress>.broadcast();
 
   String get localId => _currentLocalId;
+
+  @override
   MeshRouter get router => _router;
+
+  @override
+  FileTransferService? get fileTransferService => _fileTransferService;
 
   @override
   Stream<MeshFileTransferProgress> get fileTransferProgress =>
       _fileTransferProgressController.stream;
+
+  @override
+  Stream<FileTransferProgress> get fileTransferProgressStream =>
+      _fileTransferService?.progressStream ?? const Stream.empty();
 
   void setLocalId(String id) {
     _currentLocalId = id;
@@ -197,10 +256,20 @@ class BleMeshMessagingService implements MeshMessagingService {
         case RelayedAck():
         case RelayedFileChunk():
         case RelayedFileAck():
-        case LocalFileChunkDelivery():
-        case LocalFileChunkAckDelivery():
         case DroppedPayload():
           // Relayed/dropped appropriately by MeshRouter
+          break;
+        case LocalFileChunkDelivery(:final envelope):
+          final service = _fileTransferService;
+          if (service != null && !service.isListeningToRouter) {
+            await service.handleIncomingFileChunk(envelope);
+          }
+          break;
+        case LocalFileChunkAckDelivery(:final envelope):
+          final service = _fileTransferService;
+          if (service != null && !service.isListeningToRouter) {
+            await service.handleIncomingFileAck(envelope);
+          }
           break;
       }
     } catch (_) {
@@ -209,91 +278,22 @@ class BleMeshMessagingService implements MeshMessagingService {
   }
 
   @override
-  Future<void> sendFile(String peerId, File file) async {
-    final fileName = file.uri.pathSegments.isEmpty ? 'meshlink-transfer.bin' : file.uri.pathSegments.last;
-    final bytes = await file.readAsBytes();
-    if (bytes.isEmpty) return;
-
-    final transferId = 'FT-${DateTime.now().millisecondsSinceEpoch}';
-    final chunkSize = 32 * 1024;
-    final totalChunks = (bytes.length / chunkSize).ceil();
-    final safeTotal = totalChunks <= 0 ? 1 : totalChunks;
-    final startPayload = {
-      'type': 'file_start',
-      'version': 1,
-      'messageId': '$transferId-start',
-      'transferId': transferId,
-      'originId': _currentLocalId,
-      'destinationId': peerId,
-      'ttl': MeshMessage.defaultTtl,
-      'hopCount': 0,
-      'fileName': fileName,
-      'fileSize': bytes.length,
-      'totalChunks': safeTotal,
-      'timestamp': DateTime.now().toIso8601String(),
-    };
-    await _router.routeEncryptedPayload(startPayload);
-
-    for (var chunkIndex = 0; chunkIndex < safeTotal; chunkIndex++) {
-      final start = chunkIndex * chunkSize;
-      final end = (chunkIndex + 1) * chunkSize;
-      final chunk = bytes.sublist(start, end > bytes.length ? bytes.length : end);
-      final encrypted = await _crypto.encrypt(
-        messageId: '$transferId-chunk-$chunkIndex',
-        originId: _currentLocalId,
-        destinationId: peerId,
-        text: base64Encode(chunk),
-      );
-
-      await _router.routeEncryptedPayload({
-        'type': 'file_chunk',
-        'version': 1,
-        'messageId': '$transferId-chunk-$chunkIndex',
-        'transferId': transferId,
-        'originId': _currentLocalId,
-        'destinationId': peerId,
-        'senderId': _currentLocalId,
-        'receiverId': peerId,
-        'ttl': MeshMessage.defaultTtl,
-        'hopCount': 0,
-        'fileName': fileName,
-        'fileSize': bytes.length,
-        'totalChunks': safeTotal,
-        'chunkIndex': chunkIndex,
-        'nonce': encrypted.nonce,
-        'ciphertext': encrypted.ciphertext,
-        'mac': encrypted.mac,
-      });
-
-      _fileTransferProgressController.add(MeshFileTransferProgress(
+  Future<void> sendFile(String peerId, File file, {String? transferId}) async {
+    final transferService = _fileTransferService;
+    if (transferService != null) {
+      final result = await transferService.sendFile(
+        peerId: peerId,
+        file: file,
         transferId: transferId,
-        fileName: fileName,
-        status: 'sending',
-        progress: (chunkIndex + 1) / safeTotal,
-      ));
+      );
+      if (!result.isSuccess && result.error != null) {
+        throw result.error!;
+      }
+      return;
     }
-
-    final endPayload = {
-      'type': 'file_end',
-      'version': 1,
-      'messageId': '$transferId-end',
-      'transferId': transferId,
-      'originId': _currentLocalId,
-      'destinationId': peerId,
-      'ttl': MeshMessage.defaultTtl,
-      'hopCount': 0,
-      'fileName': fileName,
-      'fileSize': bytes.length,
-      'totalChunks': safeTotal,
-      'timestamp': DateTime.now().toIso8601String(),
-    };
-    await _router.routeEncryptedPayload(endPayload);
-    _fileTransferProgressController.add(MeshFileTransferProgress(
-      transferId: transferId,
-      fileName: fileName,
-      status: 'complete',
-      progress: 1.0,
-    ));
+    throw StateError(
+      'Cannot send file: FileTransferService is not configured on BleMeshMessagingService.',
+    );
   }
 
   Future<bool> _sendEncrypted(MeshMessage message) async {
@@ -371,6 +371,7 @@ class BleMeshMessagingService implements MeshMessagingService {
     }
   }
 
+  @Deprecated('Legacy v1 file transfer packet handler. Superseded by ChunkReceivingPipeline in Phase 8.')
   Future<void> _handleFileTransferPacket(Map<String, dynamic> payload) async {
     final type = payload['type'] as String?;
     final transferId = payload['transferId'] as String?;
@@ -441,6 +442,7 @@ class BleMeshMessagingService implements MeshMessagingService {
     }
   }
 
+  @Deprecated('Legacy v1 file assembly handler. Superseded by FileAssemblyService in Phase 8.')
   Future<void> _finalizeIncomingTransfer(String transferId) async {
     final transfer = _incomingTransfers[transferId];
     if (transfer == null) return;
@@ -547,9 +549,11 @@ class BleMeshMessagingService implements MeshMessagingService {
   @override
   Future<void> dispose() async {
     await _subscription?.cancel();
+    await _fileTransferSub?.cancel();
     await _incomingController.close();
     await _ackController.close();
     await _fileTransferProgressController.close();
+    await _fileTransferService?.dispose();
     await _router.dispose();
   }
 }
