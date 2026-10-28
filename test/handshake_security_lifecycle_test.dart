@@ -521,5 +521,39 @@ void main() {
       expect(handshakeA.pendingRequestsCount, equals(0));
       expect(sessionServiceA.hasPendingKeyPair(rekeyReq.requestId), isFalse);
     });
+
+    // ── 15. Default limit of 64 enforced under simultaneous concurrent calls (Future.wait) ──
+    test('15. Default limit of 64 is enforced even when multiple requests run simultaneously', () async {
+      final defaultHandshake = HandshakeService(
+        identityService: identityServiceA,
+        localId: 'ML-AAAAAA',
+        sessionService: sessionServiceA,
+        clock: () => simulatedNow,
+      );
+      expect(defaultHandshake.maxPendingRequests, equals(64));
+
+      final results = await Future.wait(
+        List.generate(80, (index) async {
+          try {
+            return await defaultHandshake.createKeyRequest(
+              destinationId: 'ML-SIM-$index',
+              requestId: 'REQ-SIM-$index',
+            );
+          } catch (e) {
+            return e;
+          }
+        }),
+      );
+
+      final successes = results.whereType<KeyRequestPacket>().toList();
+      final failures = results.whereType<HandshakeException>().toList();
+
+      expect(successes.length, equals(64), reason: 'Exactly default 64 requests succeed');
+      expect(failures.length, equals(16), reason: 'Remaining 16 requests rejected');
+      for (final f in failures) {
+        expect(f.code, equals(HandshakeErrorCode.concurrentHandshake));
+      }
+      expect(defaultHandshake.pendingRequestsCount, equals(64));
+    });
   });
 }
