@@ -903,6 +903,24 @@ class HandshakeService {
     _sessionService?.removeSession(peerId);
   }
 
+  /// Cleans in-memory pending requests older than [maxAge] (default 10 minutes).
+  void cleanExpiredPendingRequests({
+    DateTime? now,
+    Duration maxAge = const Duration(minutes: 10),
+  }) {
+    final currentMs = (now ?? DateTime.now()).millisecondsSinceEpoch;
+    final toRemove = <String>[];
+    for (final entry in _pendingRequests.entries) {
+      if (currentMs - entry.value.timestamp >= maxAge.inMilliseconds) {
+        toRemove.add(entry.key);
+      }
+    }
+    for (final reqId in toRemove) {
+      _pendingRequests.remove(reqId);
+      _sessionService?.clearPendingKeyPair(reqId);
+    }
+  }
+
   /// Returns pending request matching [requestId], if any.
   HandshakePendingRequest? getPendingRequest(String requestId) =>
       _pendingRequests[requestId];

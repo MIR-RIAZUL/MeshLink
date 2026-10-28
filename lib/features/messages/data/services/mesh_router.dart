@@ -173,6 +173,19 @@ class MeshRouter {
   /// Maximum allowed individual chunk ciphertext length (128 KB).
   static const int maxChunkLength = 128 * 1024;
 
+  /// Validates that a routing identifier is non-null, non-empty, within length limits (<= 128),
+  /// free of leading/trailing whitespace, and contains no ASCII control characters.
+  static bool isValidRoutingIdentifier(String? id) {
+    if (id == null || id.isEmpty) return false;
+    if (id.length > 128) return false;
+    if (id.trim() != id) return false;
+    for (int i = 0; i < id.length; i++) {
+      final code = id.codeUnitAt(i);
+      if (code < 0x20 || code == 0x7F) return false;
+    }
+    return true;
+  }
+
   final StreamController<LocalFileChunkDelivery> _fileChunkDeliveryController =
       StreamController<LocalFileChunkDelivery>.broadcast();
   final StreamController<LocalFileChunkAckDelivery> _fileAckDeliveryController =
@@ -284,6 +297,9 @@ class MeshRouter {
     required String destinationId,
     required String originId,
   }) async {
+    if (!isValidRoutingIdentifier(destinationId) || !isValidRoutingIdentifier(originId)) {
+      return false;
+    }
     final encoded = jsonEncode(payload);
     if (connectedPeers.contains(destinationId)) {
       if (await _service.sendMessage(destinationId, encoded)) return true;
@@ -352,6 +368,12 @@ class MeshRouter {
       return const DroppedPayload('Invalid encrypted packet');
     }
 
+    if (!isValidRoutingIdentifier(messageId) ||
+        !isValidRoutingIdentifier(originId) ||
+        !isValidRoutingIdentifier(destinationId)) {
+      return const DroppedPayload('Invalid routing identifier');
+    }
+
     if (ttl <= 0) {
       return const DroppedPayload('TTL expired');
     }
@@ -371,9 +393,6 @@ class MeshRouter {
     }
     if (originId == _currentLocalId) {
       return const DroppedPayload('Routing loop: packet originated locally');
-    }
-    if (originId == destinationId) {
-      return const DroppedPayload('Destination echo: originId matches destinationId');
     }
     if (originId == destinationId) {
       return const DroppedPayload('Destination echo: originId matches destinationId');
@@ -440,6 +459,12 @@ class MeshRouter {
       return const DroppedPayload('Invalid key exchange packet');
     }
 
+    if (!isValidRoutingIdentifier(requestId) ||
+        !isValidRoutingIdentifier(originId) ||
+        !isValidRoutingIdentifier(destinationId)) {
+      return const DroppedPayload('Invalid routing identifier');
+    }
+
     if (ttl <= 0) {
       return const DroppedPayload('TTL expired');
     }
@@ -490,6 +515,12 @@ class MeshRouter {
         data['version'] != 1) {
       return const DroppedPayload('Invalid file transfer packet');
     }
+    if (!isValidRoutingIdentifier(transferId) ||
+        !isValidRoutingIdentifier(messageId) ||
+        !isValidRoutingIdentifier(originId) ||
+        !isValidRoutingIdentifier(destinationId)) {
+      return const DroppedPayload('Invalid routing identifier');
+    }
     if (_processedMessageIds.contains(messageId)) {
       return const DroppedPayload('Duplicate file transfer packet');
     }
@@ -530,7 +561,7 @@ class MeshRouter {
     Map<String, dynamic> data,
     String? fromPeerId,
   ) async {
-    final messageId = data['messageId'] as String;
+    final rawMessageId = data['messageId'] as String?;
     final senderId = (data['senderId'] as String?) ?? (data['originId'] as String? ?? '');
     final receiverId = (data['receiverId'] as String?) ?? (data['destinationId'] as String? ?? '');
     final originId = (data['originId'] as String?) ?? senderId;
@@ -538,6 +569,13 @@ class MeshRouter {
     final text = (data['text'] as String? ?? '').trim();
     final ttl = (data['ttl'] as int?) ?? MeshMessage.defaultTtl;
     final hopCount = (data['hopCount'] as int?) ?? 0;
+
+    if (!isValidRoutingIdentifier(rawMessageId) ||
+        !isValidRoutingIdentifier(originId) ||
+        !isValidRoutingIdentifier(destinationId)) {
+      return const DroppedPayload('Invalid routing identifier');
+    }
+    final messageId = rawMessageId!;
 
     if (text.length > MeshMessage.maxMessageLength) {
       return const DroppedPayload('Message size limit exceeded');
@@ -631,13 +669,20 @@ class MeshRouter {
     Map<String, dynamic> data,
     String? fromPeerId,
   ) async {
-    final messageId = data['messageId'] as String;
+    final rawMessageId = data['messageId'] as String?;
     final senderId = (data['senderId'] as String?) ?? (data['originId'] as String? ?? '');
     final receiverId = (data['receiverId'] as String?) ?? (data['destinationId'] as String? ?? '');
     final originId = (data['originId'] as String?) ?? senderId;
     final destinationId = (data['destinationId'] as String?) ?? receiverId;
     final ttl = (data['ttl'] as int?) ?? MeshMessage.defaultTtl;
     final hopCount = (data['hopCount'] as int?) ?? 0;
+
+    if (!isValidRoutingIdentifier(rawMessageId) ||
+        !isValidRoutingIdentifier(originId) ||
+        !isValidRoutingIdentifier(destinationId)) {
+      return const DroppedPayload('Invalid routing identifier');
+    }
+    final messageId = rawMessageId!;
 
     if (ttl <= 0) {
       return const DroppedPayload('ACK TTL expired');
@@ -784,6 +829,10 @@ class MeshRouter {
       return const DroppedPayload('Invalid file chunk packet: missing routing metadata');
     }
 
+    if (!isValidRoutingIdentifier(originId) || !isValidRoutingIdentifier(destinationId)) {
+      return const DroppedPayload('Invalid routing identifier');
+    }
+
     if (ttl <= 0) {
       return const DroppedPayload('TTL expired');
     }
@@ -829,6 +878,9 @@ class MeshRouter {
     }
 
     final messageId = (data['messageId'] as String?) ?? '${envelope.transferId}:${envelope.chunkIndex}';
+    if (!isValidRoutingIdentifier(messageId)) {
+      return const DroppedPayload('Invalid routing identifier');
+    }
     final timestampStr = data['timestamp'] as String?;
     final timestamp = timestampStr != null
         ? (DateTime.tryParse(timestampStr) ?? DateTime.now())
@@ -948,6 +1000,10 @@ class MeshRouter {
       return const DroppedPayload('Invalid chunk ACK packet: missing routing metadata');
     }
 
+    if (!isValidRoutingIdentifier(originId) || !isValidRoutingIdentifier(destinationId)) {
+      return const DroppedPayload('Invalid routing identifier');
+    }
+
     if (ttl <= 0) {
       return const DroppedPayload('ACK TTL expired');
     }
@@ -986,6 +1042,9 @@ class MeshRouter {
     }
 
     final messageId = (data['messageId'] as String?) ?? 'ack:${envelope.transferId}:${envelope.chunkIndex}';
+    if (!isValidRoutingIdentifier(messageId)) {
+      return const DroppedPayload('Invalid routing identifier');
+    }
 
     // Replay protection and duplicate suppression
     if (_replayProtection != null) {
