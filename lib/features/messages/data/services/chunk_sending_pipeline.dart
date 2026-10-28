@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:meshlink/features/messages/data/database/app_database.dart';
@@ -369,6 +370,7 @@ class ChunkSendingPipeline {
     bool throwOnError = true,
     ChunkAckTracker? ackTracker,
     ChunkAckService? ackService,
+    List<int>? chunkIndexesToSend,
   }) async {
     final effectivePolicy = policy ?? _defaultPolicy;
     effectivePolicy.validate();
@@ -492,10 +494,44 @@ class ChunkSendingPipeline {
       // 5. Stream and send chunks with bounded backpressure and serialized encryption
       var chunksProduced = 0;
 
-      final chunkStream = _streamReader.readFile(
-        filePath: transfer.localPath,
-        chunkSize: transfer.chunkSize,
-      );
+      final Stream<({int chunkIndex, Uint8List chunkData})> chunkStream;
+      if (chunkIndexesToSend != null) {
+        final targetIndexes = (List<int>.from(chunkIndexesToSend)..sort()).toList();
+        chunkStream = () async* {
+          for (final idx in targetIndexes) {
+            if (idx < 0 || idx >= transfer.totalChunks) {
+              throw ChunkMetadataMismatchException(
+                'Chunk index ($idx) is out of bounds [0, ${transfer.totalChunks - 1}] for transfer ${transfer.transferId}.',
+              );
+            }
+            final offset = FileStreamReader.calculateChunkOffset(
+              chunkIndex: idx,
+              chunkSize: transfer.chunkSize,
+            );
+            final length = FileStreamReader.calculateChunkLength(
+              chunkIndex: idx,
+              fileSize: transfer.fileSize,
+              chunkSize: transfer.chunkSize,
+            );
+            final data = await _streamReader.readRange(
+              filePath: transfer.localPath,
+              offset: offset,
+              length: length,
+            );
+            yield (chunkIndex: idx, chunkData: data);
+          }
+        }();
+      } else {
+        chunkStream = () async* {
+          var idx = 0;
+          await for (final data in _streamReader.readFile(
+            filePath: transfer.localPath,
+            chunkSize: transfer.chunkSize,
+          )) {
+            yield (chunkIndex: idx++, chunkData: data);
+          }
+        }();
+      }
 
       Future<void> awaitOldestInFlight() async {
         if (inFlightSends.isEmpty) return;
@@ -549,7 +585,7 @@ class ChunkSendingPipeline {
         }
       }
 
-      await for (final chunk in chunkStream) {
+      await for (final item in chunkStream) {
         checkInFlightFailure();
 
         // A. Cooperative cancellation check
@@ -560,7 +596,8 @@ class ChunkSendingPipeline {
           );
         }
 
-        final chunkIndex = chunksProduced;
+        final chunkIndex = item.chunkIndex;
+        final chunk = item.chunkData;
         if (chunkIndex >= transfer.totalChunks) {
           throw ChunkMetadataMismatchException(
             'Chunk index ($chunkIndex) exceeded totalChunks (${transfer.totalChunks}) for transfer ${transfer.transferId}.',
@@ -591,8 +628,8 @@ class ChunkSendingPipeline {
 
         checkInFlightFailure();
 
-        // D. Rate control and pacing (applied between chunks, i.e. chunkIndex > 0)
-        if (chunkIndex > 0 && effectivePolicy.effectiveChunkDelay > Duration.zero) {
+        // D. Rate control and pacing (applied between chunks, i.e. chunksProduced > 0)
+        if (chunksProduced > 0 && effectivePolicy.effectiveChunkDelay > Duration.zero) {
           final delayFn = effectivePolicy.delayFunction ?? Future.delayed;
           await delayFn(effectivePolicy.effectiveChunkDelay);
 

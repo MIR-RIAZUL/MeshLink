@@ -488,5 +488,14 @@ class AppDatabase extends _$AppDatabase {
           ..where((t) => t.transferId.equals(transferId)))
         .go();
   }
+
+  /// Delete a specific chunk record for a transfer.
+  Future<int> deleteFileChunk(String transferId, int chunkIndex) {
+    return (delete(fileChunksTable)
+          ..where((t) =>
+              t.transferId.equals(transferId) &
+              t.chunkIndex.equals(chunkIndex)))
+        .go();
+  }
 }
 
