@@ -345,12 +345,6 @@ class ChunkAckService {
         'Cannot encrypt ACK: session is in invalid state (${session.state}).',
       );
     }
-    if (session.isGracePeriodExpired()) {
-      throw const AckAuthenticationException(
-        'Cannot encrypt ACK: session grace period has expired.',
-      );
-    }
-
     final seq = sequenceNumber ?? ack.sequenceNumber;
     final aad = buildAckAad(
       version: ack.version,
