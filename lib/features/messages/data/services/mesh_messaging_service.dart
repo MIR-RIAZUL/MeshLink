@@ -195,6 +195,10 @@ class BleMeshMessagingService implements MeshMessagingService {
           _ackController.add(messageId);
         case RelayedMessage():
         case RelayedAck():
+        case RelayedFileChunk():
+        case RelayedFileAck():
+        case LocalFileChunkDelivery():
+        case LocalFileChunkAckDelivery():
         case DroppedPayload():
           // Relayed/dropped appropriately by MeshRouter
           break;

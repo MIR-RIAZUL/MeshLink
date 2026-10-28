@@ -3,7 +3,12 @@ import 'dart:convert';
 
 import 'package:meshlink/features/devices/data/services/device_discovery_service.dart';
 import 'package:meshlink/features/messages/data/models/mesh_message.dart';
+import 'package:meshlink/features/messages/data/services/chunk_ack_service.dart';
+import 'package:meshlink/features/messages/data/services/chunk_sending_pipeline.dart';
 import 'package:meshlink/features/messages/data/services/replay_protection_service.dart';
+
+export 'package:meshlink/features/messages/data/models/encrypted_chunk_ack_envelope.dart';
+export 'package:meshlink/features/messages/data/models/encrypted_file_chunk_envelope.dart';
 
 sealed class RoutedPayloadResult {
   const RoutedPayloadResult();
@@ -34,6 +39,24 @@ class FileTransferDelivery extends RoutedPayloadResult {
   final Map<String, dynamic> payload;
 }
 
+class LocalFileChunkDelivery extends RoutedPayloadResult {
+  const LocalFileChunkDelivery({
+    required this.envelope,
+    required this.payload,
+  });
+  final EncryptedFileChunkEnvelope envelope;
+  final Map<String, dynamic> payload;
+}
+
+class LocalFileChunkAckDelivery extends RoutedPayloadResult {
+  const LocalFileChunkAckDelivery({
+    required this.envelope,
+    required this.payload,
+  });
+  final EncryptedChunkAckEnvelope envelope;
+  final Map<String, dynamic> payload;
+}
+
 class RelayedMessage extends RoutedPayloadResult {
   const RelayedMessage({
     required this.messageId,
@@ -58,6 +81,40 @@ class RelayedAck extends RoutedPayloadResult {
     required this.forwardedCount,
   });
   final String messageId;
+  final String destinationId;
+  final int newTtl;
+  final int newHopCount;
+  final int forwardedCount;
+}
+
+class RelayedFileChunk extends RoutedPayloadResult {
+  const RelayedFileChunk({
+    required this.transferId,
+    required this.chunkIndex,
+    required this.destinationId,
+    required this.newTtl,
+    required this.newHopCount,
+    required this.forwardedCount,
+  });
+  final String transferId;
+  final int chunkIndex;
+  final String destinationId;
+  final int newTtl;
+  final int newHopCount;
+  final int forwardedCount;
+}
+
+class RelayedFileAck extends RoutedPayloadResult {
+  const RelayedFileAck({
+    required this.transferId,
+    required this.chunkIndex,
+    required this.destinationId,
+    required this.newTtl,
+    required this.newHopCount,
+    required this.forwardedCount,
+  });
+  final String transferId;
+  final int chunkIndex;
   final String destinationId;
   final int newTtl;
   final int newHopCount;
@@ -96,6 +153,31 @@ class MeshRouter {
   StreamSubscription<DeviceDiscoveryEvent>? _subscription;
 
   static const int _maxCacheSize = 1000;
+
+  /// Maximum allowed wire payload length for raw packet strings (512 KB).
+  static const int maxWirePayloadLength = 512 * 1024;
+
+  /// Maximum allowed hop limit to prevent persistent forwarding loops.
+  static const int maxHopCount = 32;
+
+  /// Maximum allowed TTL.
+  static const int maxTtl = 64;
+
+  /// Maximum allowed individual chunk ciphertext length (128 KB).
+  static const int maxChunkLength = 128 * 1024;
+
+  final StreamController<LocalFileChunkDelivery> _fileChunkDeliveryController =
+      StreamController<LocalFileChunkDelivery>.broadcast();
+  final StreamController<LocalFileChunkAckDelivery> _fileAckDeliveryController =
+      StreamController<LocalFileChunkAckDelivery>.broadcast();
+
+  /// Stream of file chunk envelopes successfully delivered to this local destination.
+  Stream<LocalFileChunkDelivery> get onFileChunkDelivery =>
+      _fileChunkDeliveryController.stream;
+
+  /// Stream of file chunk ACK/NACK envelopes successfully delivered to this local destination.
+  Stream<LocalFileChunkAckDelivery> get onFileAckDelivery =>
+      _fileAckDeliveryController.stream;
 
   String get localId => _currentLocalId;
 
@@ -137,6 +219,59 @@ class MeshRouter {
         originId: payload['originId'] as String,
       );
 
+  /// Routes a Phase 8 encrypted file chunk envelope across the mesh network.
+  ///
+  /// Packages [envelope] into an authenticated wire frame preserving all immutable
+  /// end-to-end cryptographic fields, setting the initial TTL and hopCount.
+  Future<bool> routeFileChunk(
+    EncryptedFileChunkEnvelope envelope, {
+    int? ttl,
+  }) async {
+    final payload = {
+      'type': 'file_chunk',
+      'version': EncryptedFileChunkEnvelope.currentProtocolVersion,
+      'messageId': '${envelope.transferId}:${envelope.chunkIndex}',
+      'transferId': envelope.transferId,
+      'chunkIndex': envelope.chunkIndex,
+      'originId': envelope.originId,
+      'destinationId': envelope.destinationId,
+      'ttl': ttl ?? MeshMessage.defaultTtl,
+      'hopCount': 0,
+      'timestamp': DateTime.now().toIso8601String(),
+      ...envelope.toMap(),
+    };
+    return _routePayload(
+      payload,
+      destinationId: envelope.destinationId,
+      originId: envelope.originId,
+    );
+  }
+
+  /// Routes a Phase 8 encrypted chunk acknowledgment (ACK/NACK) envelope across the mesh network.
+  Future<bool> routeFileAck(
+    EncryptedChunkAckEnvelope envelope, {
+    int? ttl,
+  }) async {
+    final payload = {
+      'type': 'file_ack',
+      'version': EncryptedChunkAckEnvelope.currentProtocolVersion,
+      'messageId': 'ack:${envelope.transferId}:${envelope.chunkIndex}',
+      'transferId': envelope.transferId,
+      'chunkIndex': envelope.chunkIndex,
+      'originId': envelope.originId,
+      'destinationId': envelope.destinationId,
+      'ttl': ttl ?? MeshMessage.defaultTtl,
+      'hopCount': 0,
+      'timestamp': envelope.createdAt.toIso8601String(),
+      ...envelope.toMap(),
+    };
+    return _routePayload(
+      payload,
+      destinationId: envelope.destinationId,
+      originId: envelope.originId,
+    );
+  }
+
   Future<bool> _routePayload(
     Map<String, dynamic> payload, {
     required String destinationId,
@@ -160,6 +295,9 @@ class MeshRouter {
     String payload, {
     String? fromPeerId,
   }) async {
+    if (payload.length > maxWirePayloadLength) {
+      return const DroppedPayload('Payload size limit exceeded');
+    }
     try {
       final data = jsonDecode(payload) as Map<String, dynamic>;
       final type = data['type'] as String?;
@@ -170,10 +308,18 @@ class MeshRouter {
         return await _handleIncomingEncryptedMessage(data, fromPeerId);
       } else if (type == 'key_request' || type == 'key_response') {
         return await _handleKeyExchange(data, fromPeerId);
+      } else if (type == 'file_chunk') {
+        if (data['version'] == EncryptedFileChunkEnvelope.currentProtocolVersion) {
+          return await _handleIncomingEncryptedFileChunk(data, fromPeerId);
+        }
+        return await _handleIncomingFileTransfer(data, fromPeerId);
+      } else if (type == 'file_ack' || type == 'file_chunk_ack') {
+        if (data['version'] == EncryptedChunkAckEnvelope.currentProtocolVersion) {
+          return await _handleIncomingEncryptedChunkAck(data, fromPeerId);
+        }
+        return await _handleIncomingFileTransfer(data, fromPeerId);
       } else if (type == 'file_start' ||
-          type == 'file_chunk' ||
           type == 'file_end' ||
-          type == 'file_ack' ||
           type == 'file_error') {
         return await _handleIncomingFileTransfer(data, fromPeerId);
       } else if (type == 'ack') {
@@ -543,8 +689,322 @@ class MeshRouter {
     }
   }
 
+  Future<RoutedPayloadResult> _handleIncomingEncryptedFileChunk(
+    Map<String, dynamic> data,
+    String? fromPeerId,
+  ) async {
+    final destinationId = data['destinationId'] as String?;
+    final originId = data['originId'] as String?;
+    final ttl = data['ttl'] as int?;
+    final hopCount = data['hopCount'] as int? ?? 0;
+
+    if (destinationId == null || originId == null || ttl == null) {
+      return const DroppedPayload('Invalid file chunk packet: missing routing metadata');
+    }
+
+    if (ttl <= 0) {
+      return const DroppedPayload('TTL expired');
+    }
+    if (ttl > maxTtl) {
+      return const DroppedPayload('Invalid TTL: exceeds maximum allowed TTL');
+    }
+    if (hopCount < 0) {
+      return const DroppedPayload('Invalid hopCount');
+    }
+    if (hopCount >= maxHopCount) {
+      return const DroppedPayload('Hop limit exceeded');
+    }
+
+    // Routing loop detection
+    if (fromPeerId != null && fromPeerId == destinationId) {
+      return const DroppedPayload('Routing loop detected: received from packet destination');
+    }
+    if (originId == _currentLocalId) {
+      return const DroppedPayload('Routing loop: packet originated locally');
+    }
+
+    // Parse and validate the immutable EncryptedFileChunkEnvelope
+    final Map<String, dynamic> envelopeMap;
+    if (data['envelope'] is Map<String, dynamic>) {
+      envelopeMap = data['envelope'] as Map<String, dynamic>;
+    } else {
+      envelopeMap = data;
+    }
+
+    final EncryptedFileChunkEnvelope envelope;
+    try {
+      envelope = EncryptedFileChunkEnvelope.fromMap(envelopeMap);
+      envelope.validate();
+    } catch (e) {
+      return DroppedPayload('Malformed or invalid file chunk envelope: $e');
+    }
+
+    if (envelope.chunkLength > maxChunkLength || envelope.ciphertext.length > maxChunkLength) {
+      return const DroppedPayload('Chunk payload exceeds maximum allowed chunk length');
+    }
+
+    final messageId = (data['messageId'] as String?) ?? '${envelope.transferId}:${envelope.chunkIndex}';
+    final timestampStr = data['timestamp'] as String?;
+    final timestamp = timestampStr != null
+        ? (DateTime.tryParse(timestampStr) ?? DateTime.now())
+        : DateTime.now();
+
+    // Replay protection and duplicate suppression
+    if (_replayProtection != null) {
+      if (destinationId != _currentLocalId) {
+        // Relaying node: check and record so duplicates are not forwarded
+        final outcome = await _replayProtection.checkAndMarkSeen(
+          packetType: 'file_chunk',
+          originId: envelope.originId,
+          packetId: messageId,
+          timestamp: timestamp,
+        );
+        if (!outcome.isAccepted) {
+          return const DroppedPayload('Duplicate or invalid replay packet');
+        }
+      } else {
+        // Local destination: pre-check if already recorded
+        final isDuplicate = await _replayProtection.isSeen(
+          packetType: 'file_chunk',
+          originId: envelope.originId,
+          packetId: messageId,
+        );
+        if (isDuplicate) {
+          return const DroppedPayload('Duplicate file chunk');
+        }
+      }
+    } else {
+      if (_processedMessageIds.contains(messageId)) {
+        return const DroppedPayload('Duplicate file chunk');
+      }
+      _addToProcessed(messageId, _processedMessageIds);
+    }
+
+    if (destinationId == _currentLocalId) {
+      final delivery = LocalFileChunkDelivery(envelope: envelope, payload: data);
+      _fileChunkDeliveryController.add(delivery);
+      return delivery;
+    }
+
+    return _relayFileChunk(
+      data,
+      envelope,
+      messageId,
+      originId,
+      destinationId,
+      ttl,
+      hopCount,
+      fromPeerId,
+    );
+  }
+
+  Future<RoutedPayloadResult> _relayFileChunk(
+    Map<String, dynamic> data,
+    EncryptedFileChunkEnvelope envelope,
+    String messageId,
+    String originId,
+    String destinationId,
+    int ttl,
+    int hopCount,
+    String? fromPeerId,
+  ) async {
+    final newTtl = ttl - 1;
+    final newHopCount = hopCount + 1;
+    if (newTtl <= 0) return const DroppedPayload('TTL expired');
+    if (newHopCount >= maxHopCount) return const DroppedPayload('Hop limit exceeded');
+
+    final forwarded = jsonEncode({
+      ...data,
+      'ttl': newTtl,
+      'hopCount': newHopCount,
+    });
+
+    var forwardedCount = 0;
+    if (connectedPeers.contains(destinationId)) {
+      if (await _service.sendMessage(destinationId, forwarded)) {
+        forwardedCount++;
+      }
+    } else {
+      for (final peerId in connectedPeers) {
+        if (peerId != fromPeerId &&
+            peerId != originId &&
+            peerId != _currentLocalId) {
+          if (await _service.sendMessage(peerId, forwarded)) {
+            forwardedCount++;
+          }
+        }
+      }
+    }
+
+    if (forwardedCount == 0) {
+      return const DroppedPayload('No route to host: destination unreachable');
+    }
+
+    return RelayedFileChunk(
+      transferId: envelope.transferId,
+      chunkIndex: envelope.chunkIndex,
+      destinationId: destinationId,
+      newTtl: newTtl,
+      newHopCount: newHopCount,
+      forwardedCount: forwardedCount,
+    );
+  }
+
+  Future<RoutedPayloadResult> _handleIncomingEncryptedChunkAck(
+    Map<String, dynamic> data,
+    String? fromPeerId,
+  ) async {
+    final destinationId = data['destinationId'] as String?;
+    final originId = data['originId'] as String?;
+    final ttl = data['ttl'] as int?;
+    final hopCount = data['hopCount'] as int? ?? 0;
+
+    if (destinationId == null || originId == null || ttl == null) {
+      return const DroppedPayload('Invalid chunk ACK packet: missing routing metadata');
+    }
+
+    if (ttl <= 0) {
+      return const DroppedPayload('ACK TTL expired');
+    }
+    if (ttl > maxTtl) {
+      return const DroppedPayload('Invalid TTL: exceeds maximum allowed TTL');
+    }
+    if (hopCount < 0) {
+      return const DroppedPayload('Invalid hopCount');
+    }
+    if (hopCount >= maxHopCount) {
+      return const DroppedPayload('Hop limit exceeded');
+    }
+
+    // Routing loop detection
+    if (fromPeerId != null && fromPeerId == destinationId) {
+      return const DroppedPayload('Routing loop detected: received from packet destination');
+    }
+    if (originId == _currentLocalId) {
+      return const DroppedPayload('Routing loop: ACK originated locally');
+    }
+
+    // Parse and validate the immutable EncryptedChunkAckEnvelope
+    final Map<String, dynamic> envelopeMap;
+    if (data['envelope'] is Map<String, dynamic>) {
+      envelopeMap = data['envelope'] as Map<String, dynamic>;
+    } else {
+      envelopeMap = data;
+    }
+
+    final EncryptedChunkAckEnvelope envelope;
+    try {
+      envelope = EncryptedChunkAckEnvelope.fromMap(envelopeMap);
+      envelope.validate();
+    } catch (e) {
+      return DroppedPayload('Malformed or invalid chunk ACK envelope: $e');
+    }
+
+    final messageId = (data['messageId'] as String?) ?? 'ack:${envelope.transferId}:${envelope.chunkIndex}';
+
+    // Replay protection and duplicate suppression
+    if (_replayProtection != null) {
+      if (destinationId != _currentLocalId) {
+        // Relaying node: check and record so duplicate ACKs are not forwarded
+        final outcome = await _replayProtection.checkAndMarkSeen(
+          packetType: 'file_ack',
+          originId: envelope.originId,
+          packetId: messageId,
+          timestamp: envelope.createdAt,
+        );
+        if (!outcome.isAccepted) {
+          return const DroppedPayload('Duplicate or invalid ACK');
+        }
+      } else {
+        // Local destination: pre-check if already recorded
+        final isDuplicate = await _replayProtection.isSeen(
+          packetType: 'file_ack',
+          originId: envelope.originId,
+          packetId: messageId,
+        );
+        if (isDuplicate) {
+          return const DroppedPayload('Duplicate ACK');
+        }
+      }
+    } else {
+      if (_processedAckIds.contains(messageId)) {
+        return const DroppedPayload('Duplicate ACK');
+      }
+      _addToProcessed(messageId, _processedAckIds);
+    }
+
+    if (destinationId == _currentLocalId) {
+      final delivery = LocalFileChunkAckDelivery(envelope: envelope, payload: data);
+      _fileAckDeliveryController.add(delivery);
+      return delivery;
+    }
+
+    return _relayFileAck(
+      data,
+      envelope,
+      messageId,
+      originId,
+      destinationId,
+      ttl,
+      hopCount,
+      fromPeerId,
+    );
+  }
+
+  Future<RoutedPayloadResult> _relayFileAck(
+    Map<String, dynamic> data,
+    EncryptedChunkAckEnvelope envelope,
+    String messageId,
+    String originId,
+    String destinationId,
+    int ttl,
+    int hopCount,
+    String? fromPeerId,
+  ) async {
+    final newTtl = ttl - 1;
+    final newHopCount = hopCount + 1;
+    if (newTtl <= 0) return const DroppedPayload('ACK TTL expired');
+    if (newHopCount >= maxHopCount) return const DroppedPayload('Hop limit exceeded');
+
+    final forwarded = jsonEncode({
+      ...data,
+      'ttl': newTtl,
+      'hopCount': newHopCount,
+    });
+
+    var forwardedCount = 0;
+    if (connectedPeers.contains(destinationId)) {
+      if (await _service.sendMessage(destinationId, forwarded)) {
+        forwardedCount++;
+      }
+    } else {
+      for (final peerId in connectedPeers) {
+        if (peerId != fromPeerId &&
+            peerId != originId &&
+            peerId != _currentLocalId) {
+          if (await _service.sendMessage(peerId, forwarded)) {
+            forwardedCount++;
+          }
+        }
+      }
+    }
+
+    if (forwardedCount == 0) {
+      return const DroppedPayload('No route to host: destination unreachable');
+    }
+
+    return RelayedFileAck(
+      transferId: envelope.transferId,
+      chunkIndex: envelope.chunkIndex,
+      destinationId: destinationId,
+      newTtl: newTtl,
+      newHopCount: newHopCount,
+      forwardedCount: forwardedCount,
+    );
+  }
+
   void _addToProcessed(String id, Set<String> cache) {
-    if (cache.length > _maxCacheSize) {
+    if (cache.length >= _maxCacheSize) {
       cache.remove(cache.first);
     }
     cache.add(id);
@@ -552,5 +1012,43 @@ class MeshRouter {
 
   Future<void> dispose() async {
     await _subscription?.cancel();
+    await _fileChunkDeliveryController.close();
+    await _fileAckDeliveryController.close();
   }
+}
+
+/// Router-backed adapter implementing [ChunkTransportSender] for [ChunkSendingPipeline].
+///
+/// Hands off [EncryptedFileChunkEnvelope] instances to [MeshRouter.routeFileChunk]
+/// for multihop store-and-forward transmission.
+class RouterChunkTransportSender implements ChunkTransportSender {
+  RouterChunkTransportSender({
+    required this.router,
+    this.ttl = MeshMessage.defaultTtl,
+  });
+
+  final MeshRouter router;
+  final int ttl;
+
+  @override
+  Future<bool> sendChunk(EncryptedFileChunkEnvelope envelope) =>
+      router.routeFileChunk(envelope, ttl: ttl);
+}
+
+/// Router-backed adapter implementing [ChunkAckTransportSender] for [ChunkAckService].
+///
+/// Hands off [EncryptedChunkAckEnvelope] instances to [MeshRouter.routeFileAck]
+/// for multihop store-and-forward transmission.
+class RouterChunkAckTransportSender implements ChunkAckTransportSender {
+  RouterChunkAckTransportSender({
+    required this.router,
+    this.ttl = MeshMessage.defaultTtl,
+  });
+
+  final MeshRouter router;
+  final int ttl;
+
+  @override
+  Future<bool> sendAck(EncryptedChunkAckEnvelope envelope) =>
+      router.routeFileAck(envelope, ttl: ttl);
 }
