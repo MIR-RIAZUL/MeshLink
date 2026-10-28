@@ -96,6 +96,10 @@ class EncryptedFileChunkEnvelope {
     _validateIdentifier(destinationId, 'destinationId');
     _validateIdentifier(sessionId, 'sessionId');
 
+    if (originId == destinationId) {
+      throw const FormatException('originId and destinationId cannot be identical');
+    }
+
     if (epoch < 0 || epoch > 0xFFFFFFFF) {
       throw FormatException('epoch out of range [0, 0xFFFFFFFF] (got $epoch)');
     }

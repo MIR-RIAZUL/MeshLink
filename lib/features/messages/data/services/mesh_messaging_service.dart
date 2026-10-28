@@ -7,6 +7,7 @@ import 'package:meshlink/features/messages/data/database/app_database.dart';
 import 'package:meshlink/features/messages/data/models/mesh_message.dart';
 import 'package:meshlink/features/messages/data/repositories/message_repository.dart';
 import 'package:meshlink/features/messages/data/services/ephemeral_session_service.dart';
+import 'package:meshlink/features/messages/data/services/file_path_service.dart';
 import 'package:meshlink/features/messages/data/services/file_transfer_service.dart';
 import 'package:meshlink/features/messages/data/services/message_storage_service.dart';
 import 'package:meshlink/features/messages/data/services/mesh_router.dart';
@@ -477,10 +478,21 @@ class BleMeshMessagingService implements MeshMessagingService {
     }
 
     final downloadDir = await getDownloadsDirectory() ?? Directory.systemTemp;
-    final originalName = transfer['fileName'] as String? ?? 'meshlink-transfer.bin';
-    final baseName = p.basenameWithoutExtension(originalName);
-    final extension = p.extension(originalName);
-    var candidate = File(p.join(downloadDir.path, originalName));
+    final rawName = transfer['fileName'] as String? ?? 'meshlink-transfer.bin';
+    final safeName = FilePathService.sanitizeFileName(rawName);
+    final baseName = p.basenameWithoutExtension(safeName);
+    final extension = p.extension(safeName);
+    var candidate = File(p.join(downloadDir.path, safeName));
+    if (!FilePathService.isPathInsideDirectory(candidate.path, downloadDir.path)) {
+      _fileTransferProgressController.add(MeshFileTransferProgress(
+        transferId: transferId,
+        fileName: safeName,
+        status: 'failed',
+        progress: 0.0,
+      ));
+      _incomingTransfers.remove(transferId);
+      return;
+    }
     var counter = 1;
     while (await candidate.exists()) {
       candidate = File(p.join(downloadDir.path, '$baseName($counter)$extension'));
@@ -489,7 +501,7 @@ class BleMeshMessagingService implements MeshMessagingService {
     await candidate.writeAsBytes(assembled, flush: true);
     _fileTransferProgressController.add(MeshFileTransferProgress(
       transferId: transferId,
-      fileName: originalName,
+      fileName: safeName,
       status: 'complete',
       progress: 1.0,
     ));

@@ -169,7 +169,29 @@ class FilePathService {
       final canonicalCandidate = p.canonicalize(candidatePath);
 
       // Candidate must be strictly within root (child or descendant)
-      return p.isWithin(canonicalRoot, canonicalCandidate);
+      if (!p.isWithin(canonicalRoot, canonicalCandidate)) {
+        return false;
+      }
+
+      // If entity exists on disk, verify resolved symlink target remains inside root
+      final candidateEntity = File(canonicalCandidate);
+      if (candidateEntity.existsSync()) {
+        try {
+          final resolvedCandidate = candidateEntity.resolveSymbolicLinksSync();
+          final rootEntity = Directory(canonicalRoot);
+          final resolvedRoot = rootEntity.existsSync()
+              ? rootEntity.resolveSymbolicLinksSync()
+              : canonicalRoot;
+          if (!p.isWithin(resolvedRoot, resolvedCandidate) &&
+              resolvedCandidate != resolvedRoot) {
+            return false;
+          }
+        } catch (_) {
+          return false;
+        }
+      }
+
+      return true;
     } catch (_) {
       return false;
     }

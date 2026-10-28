@@ -212,7 +212,11 @@ class DirectionalSessionEncryptionService {
         'Cannot encrypt: session is in invalid lifecycle state (${session.state})',
       );
     }
-
+    if (session.isGracePeriodExpired()) {
+      throw const DirectionalEncryptionException(
+        'Cannot encrypt: session grace period has expired',
+      );
+    }
     final keys = await getOrDeriveKeys(session);
     if (keys.isDestroyed) {
       throw const DirectionalEncryptionException(
@@ -268,6 +272,11 @@ class DirectionalSessionEncryptionService {
       );
     }
 
+    if (session.isGracePeriodExpired()) {
+      throw const DirectionalEncryptionException(
+        'Cannot decrypt: session grace period has expired',
+      );
+    }
     final keys = await getOrDeriveKeys(session);
     if (keys.isDestroyed) {
       throw const DirectionalEncryptionException(

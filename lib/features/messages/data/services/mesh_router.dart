@@ -352,6 +352,33 @@ class MeshRouter {
       return const DroppedPayload('Invalid encrypted packet');
     }
 
+    if (ttl <= 0) {
+      return const DroppedPayload('TTL expired');
+    }
+    if (ttl > maxTtl) {
+      return const DroppedPayload('Invalid TTL: exceeds maximum allowed TTL');
+    }
+    if (hopCount < 0) {
+      return const DroppedPayload('Invalid hopCount');
+    }
+    if (hopCount >= maxHopCount) {
+      return const DroppedPayload('Hop limit exceeded');
+    }
+
+    // Routing loop detection
+    if (fromPeerId != null && fromPeerId == destinationId) {
+      return const DroppedPayload('Routing loop detected: received from packet destination');
+    }
+    if (originId == _currentLocalId) {
+      return const DroppedPayload('Routing loop: packet originated locally');
+    }
+    if (originId == destinationId) {
+      return const DroppedPayload('Destination echo: originId matches destinationId');
+    }
+    if (originId == destinationId) {
+      return const DroppedPayload('Destination echo: originId matches destinationId');
+    }
+
     final timestampStr = data['timestamp'] as String?;
     final timestamp = timestampStr != null
         ? (DateTime.tryParse(timestampStr) ?? DateTime.now())
@@ -411,6 +438,30 @@ class MeshRouter {
     if (requestId == null || originId == null || destinationId == null || ttl == null ||
         data['version'] != 1 || data['publicKey'] is! String) {
       return const DroppedPayload('Invalid key exchange packet');
+    }
+
+    if (ttl <= 0) {
+      return const DroppedPayload('TTL expired');
+    }
+    if (ttl > maxTtl) {
+      return const DroppedPayload('Invalid TTL: exceeds maximum allowed TTL');
+    }
+    if (hopCount < 0) {
+      return const DroppedPayload('Invalid hopCount');
+    }
+    if (hopCount >= maxHopCount) {
+      return const DroppedPayload('Hop limit exceeded');
+    }
+
+    // Routing loop detection
+    if (fromPeerId != null && fromPeerId == destinationId) {
+      return const DroppedPayload('Routing loop detected: received from packet destination');
+    }
+    if (originId == _currentLocalId) {
+      return const DroppedPayload('Routing loop: packet originated locally');
+    }
+    if (originId == destinationId) {
+      return const DroppedPayload('Destination echo: originId matches destinationId');
     }
     final cacheKey = 'key:$requestId:${data['type']}';
     if (_processedMessageIds.contains(cacheKey)) return const DroppedPayload('Duplicate key exchange packet');
@@ -588,6 +639,30 @@ class MeshRouter {
     final ttl = (data['ttl'] as int?) ?? MeshMessage.defaultTtl;
     final hopCount = (data['hopCount'] as int?) ?? 0;
 
+    if (ttl <= 0) {
+      return const DroppedPayload('ACK TTL expired');
+    }
+    if (ttl > maxTtl) {
+      return const DroppedPayload('Invalid TTL: exceeds maximum allowed TTL');
+    }
+    if (hopCount < 0) {
+      return const DroppedPayload('Invalid hopCount');
+    }
+    if (hopCount >= maxHopCount) {
+      return const DroppedPayload('Hop limit exceeded');
+    }
+
+    // Routing loop detection
+    if (fromPeerId != null && fromPeerId == destinationId) {
+      return const DroppedPayload('Routing loop detected: received from packet destination');
+    }
+    if (originId == _currentLocalId) {
+      return const DroppedPayload('Routing loop: ACK originated locally');
+    }
+    if (originId == destinationId) {
+      return const DroppedPayload('Destination echo: originId matches destinationId');
+    }
+
     final ackKey = '${messageId}_$originId';
     if (_replayProtection != null) {
       final timestampStr = data['timestamp'] as String?;
@@ -728,6 +803,9 @@ class MeshRouter {
     }
     if (originId == _currentLocalId) {
       return const DroppedPayload('Routing loop: packet originated locally');
+    }
+    if (originId == destinationId) {
+      return const DroppedPayload('Destination echo: originId matches destinationId');
     }
 
     // Parse and validate the immutable EncryptedFileChunkEnvelope

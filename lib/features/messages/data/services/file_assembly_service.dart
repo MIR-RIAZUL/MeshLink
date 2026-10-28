@@ -302,6 +302,11 @@ class FileAssemblyService {
         'Persisted total chunks cannot be negative ($totalChunks).',
       );
     }
+    if (transfer.chunkSize <= 0) {
+      throw InvalidChunkMetadataException(
+        'Persisted chunk size must be positive (${transfer.chunkSize}).',
+      );
+    }
     if (expectedFileSize == 0 && totalChunks > 1) {
       throw InvalidChunkMetadataException(
         'Zero-byte file cannot declare multiple chunks ($totalChunks).',

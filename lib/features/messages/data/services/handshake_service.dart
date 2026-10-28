@@ -262,6 +262,23 @@ class HandshakeService {
     List<int>? ephemeralPublicKey,
     int? timestamp,
   }) async {
+    if (destinationId == _localId) {
+      throw const HandshakeException(
+        HandshakeErrorCode.invalidRequest,
+        'Cannot initiate handshake with self',
+      );
+    }
+    if (_peerRepository != null) {
+      final knownPeer = await _peerRepository.getPeerIdentity(destinationId);
+      if (knownPeer != null &&
+          knownPeer.trustStatus.trim().toLowerCase() == 'compromised') {
+        throw const HandshakeException(
+          HandshakeErrorCode.peerIdentityMismatch,
+          'Cannot initiate handshake with compromised peer',
+        );
+      }
+    }
+
     final active = _sessionService?.getSession(destinationId);
     if (active != null && !active.isDestroyed) {
       if (!(_sessionService?.isRekeyInProgress(destinationId) ?? false)) {
@@ -363,6 +380,13 @@ class HandshakeService {
       enforceHorizon: enforceTimestampHorizon,
     );
 
+    if (request.originId == _localId) {
+      throw const HandshakeException(
+        HandshakeErrorCode.invalidRequest,
+        'Origin ID matches local device ID (reflection loop)',
+      );
+    }
+
     final Uint8List idPubKeyBytes;
     final Uint8List ephPubKeyBytes;
     final Uint8List sigBytes;
@@ -392,15 +416,22 @@ class HandshakeService {
       );
     }
 
-    // Check if the peer's identity key is already known and has changed
+    // Check if the peer's identity key is already known and has changed or is compromised
     if (_peerRepository != null) {
       final knownPeer = await _peerRepository.getPeerIdentity(request.originId);
-      if (knownPeer != null &&
-          knownPeer.identityPublicKey != request.identityPublicKey) {
-        throw HandshakeException(
-          HandshakeErrorCode.peerIdentityMismatch,
-          'Known peer ${request.originId} presented a different identity key',
-        );
+      if (knownPeer != null) {
+        if (knownPeer.trustStatus.trim().toLowerCase() == 'compromised') {
+          throw const HandshakeException(
+            HandshakeErrorCode.peerIdentityMismatch,
+            'Cannot accept key request: peer is marked as compromised',
+          );
+        }
+        if (knownPeer.identityPublicKey != request.identityPublicKey) {
+          throw HandshakeException(
+            HandshakeErrorCode.peerIdentityMismatch,
+            'Known peer ${request.originId} presented a different identity key',
+          );
+        }
       }
     }
 
@@ -426,6 +457,13 @@ class HandshakeService {
       throw const HandshakeException(
         HandshakeErrorCode.invalidSignature,
         'Request signature verification failed',
+      );
+    }
+
+    if (request.destinationId != _localId) {
+      throw const HandshakeException(
+        HandshakeErrorCode.invalidRequest,
+        'Destination ID does not match local device ID',
       );
     }
 
@@ -641,16 +679,23 @@ class HandshakeService {
         );
       }
 
-      // Check if the peer's identity key has changed against stored records
+      // Check if the peer's identity key has changed against stored records or is compromised
       if (_peerRepository != null) {
         final knownPeer =
             await _peerRepository.getPeerIdentity(response.originId);
-        if (knownPeer != null &&
-            knownPeer.identityPublicKey != response.identityPublicKey) {
-          throw HandshakeException(
-            HandshakeErrorCode.peerIdentityMismatch,
-            'Known peer ${response.originId} presented a different identity key',
-          );
+        if (knownPeer != null) {
+          if (knownPeer.trustStatus.trim().toLowerCase() == 'compromised') {
+            throw const HandshakeException(
+              HandshakeErrorCode.peerIdentityMismatch,
+              'Cannot accept key response: peer is marked as compromised',
+            );
+          }
+          if (knownPeer.identityPublicKey != response.identityPublicKey) {
+            throw HandshakeException(
+              HandshakeErrorCode.peerIdentityMismatch,
+              'Known peer ${response.originId} presented a different identity key',
+            );
+          }
         }
       }
 

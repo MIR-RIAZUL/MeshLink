@@ -694,7 +694,7 @@ class ChunkSendingPipeline {
 
       final Stream<({int chunkIndex, Uint8List chunkData})> chunkStream;
       if (chunkIndexesToSend != null) {
-        final targetIndexes = (List<int>.from(chunkIndexesToSend)..sort()).toList();
+        final targetIndexes = (Set<int>.from(chunkIndexesToSend).toList()..sort());
         chunkStream = () async* {
           for (final idx in targetIndexes) {
             if (idx < 0 || idx >= transfer.totalChunks) {

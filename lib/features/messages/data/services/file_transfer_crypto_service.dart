@@ -69,6 +69,12 @@ class FileTransferCryptoService {
     _validateIdentifier(originId, 'originId');
     _validateIdentifier(destinationId, 'destinationId');
 
+    if (originId == destinationId) {
+      throw const FileTransferCryptoException(
+        'originId and destinationId cannot be identical',
+      );
+    }
+
     if (chunkIndex < 0 || chunkIndex > 0xFFFFFFFF) {
       throw FileTransferCryptoException(
         'chunkIndex out of range [0, 0xFFFFFFFF] (got $chunkIndex)',
@@ -269,7 +275,6 @@ class FileTransferCryptoService {
         'Cannot encrypt chunk: session is in invalid lifecycle state (${session.state})',
       );
     }
-
     final effectiveChunkLength = chunkLength ?? plaintext.length;
 
     validateChunkMetadata(

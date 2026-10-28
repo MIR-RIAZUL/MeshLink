@@ -68,10 +68,13 @@ class FileChunkResumeRequest {
     required this.epoch,
     required this.createdAt,
   }) : missingChunkIndexes = List<int>.unmodifiable(
-          List<int>.from(missingChunkIndexes)..sort(),
+          Set<int>.from(missingChunkIndexes).toList()..sort(),
         ) {
     validate();
   }
+
+  /// Maximum allowed missing chunks in a single resume request to prevent memory exhaustion.
+  static const int maxMissingChunksLimit = 100000;
 
   final String transferId;
   final List<int> missingChunkIndexes;
@@ -99,6 +102,11 @@ class FileChunkResumeRequest {
     }
     if (epoch < 0) {
       throw ArgumentError('epoch cannot be negative ($epoch).');
+    }
+    if (missingChunkIndexes.length > maxMissingChunksLimit) {
+      throw ArgumentError(
+        'missingChunkIndexes count (${missingChunkIndexes.length}) exceeds maximum limit of $maxMissingChunksLimit.',
+      );
     }
     for (final idx in missingChunkIndexes) {
       if (idx < 0) {
