@@ -178,24 +178,106 @@ class FileChunksTable extends Table {
   ];
 }
 
+/// Table storing persistent group metadata and lifecycle state.
+@DataClassName('GroupEntry')
+class GroupsTable extends Table {
+  /// Unique group identifier (e.g. GRP-1727220000000-A1B2C3).
+  TextColumn get groupId => text()();
+
+  /// Human-readable group name (1-64 characters).
+  TextColumn get name => text()();
+
+  /// Creator MeshLink device ID.
+  TextColumn get creatorId => text()();
+
+  /// Current admin MeshLink device ID.
+  TextColumn get adminId => text()();
+
+  /// Monotonically increasing membership epoch (starts at 1).
+  IntColumn get epoch => integer().withDefault(const Constant(1))();
+
+  /// Creation timestamp in UTC.
+  DateTimeColumn get createdAt => dateTime()();
+
+  /// Last updated timestamp in UTC.
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {groupId};
+
+  List<TableIndex> get tableIndexes => [
+    TableIndex(name: 'idx_groups_admin_id', columns: {#adminId}),
+    TableIndex(name: 'idx_groups_created_at', columns: {#createdAt}),
+  ];
+
+  @override
+  List<String> get customConstraints => [
+    'CHECK (epoch >= 1)',
+    'CHECK (length(name) >= 1 AND length(name) <= 64)',
+  ];
+}
+
+/// Table storing persistent group membership, roles, and invitation states.
+@DataClassName('GroupMemberEntry')
+class GroupMembersTable extends Table {
+  /// Target group identifier, referencing GroupsTable.
+  TextColumn get groupId => text().customConstraint(
+      'NOT NULL REFERENCES groups_table(group_id) ON DELETE CASCADE')();
+
+  /// Peer device identifier.
+  TextColumn get peerId => text()();
+
+  /// Role within the group: 'admin' or 'member'.
+  TextColumn get role => text()();
+
+  /// Membership lifecycle status: 'active', 'pendingInvite', 'removed'.
+  TextColumn get status => text()();
+
+  /// Timestamp when the member joined or was invited.
+  DateTimeColumn get joinedAt => dateTime()();
+
+  /// Peer device ID of the admin who invited this member.
+  TextColumn get invitedBy => text()();
+
+  @override
+  Set<Column> get primaryKey => {groupId, peerId};
+
+  List<TableIndex> get tableIndexes => [
+    TableIndex(name: 'idx_group_members_peer_id', columns: {#peerId}),
+    TableIndex(name: 'idx_group_members_status', columns: {#groupId, #status}),
+  ];
+
+  @override
+  List<String> get customConstraints => [
+    "CHECK (role IN ('admin', 'member'))",
+    "CHECK (status IN ('active', 'pendingInvite', 'removed'))",
+  ];
+}
+
 @DriftDatabase(tables: [
   MessagesTable,
   PeerIdentitiesTable,
   SeenPacketsTable,
   FileTransfersTable,
   FileChunksTable,
+  GroupsTable,
+  GroupMembersTable,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor])
       : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
+    beforeOpen: (details) async {
+      await customStatement('PRAGMA foreign_keys = ON;');
+    },
     onCreate: (m) async {
       await m.createAll();
+      await _createTriggers();
     },
     onUpgrade: (m, from, to) async {
       if (from < 2) {
@@ -206,8 +288,40 @@ class AppDatabase extends _$AppDatabase {
         await m.createTable(fileTransfersTable);
         await m.createTable(fileChunksTable);
       }
+      if (from < 4) {
+        await m.createTable(groupsTable);
+        await m.createTable(groupMembersTable);
+        await _createTriggers();
+      }
     },
   );
+
+  Future<void> _createTriggers() async {
+    await customStatement('''
+      CREATE TRIGGER IF NOT EXISTS trg_group_members_limit
+      BEFORE INSERT ON group_members_table
+      WHEN (
+        SELECT COUNT(DISTINCT peer_id)
+        FROM group_members_table
+        WHERE group_id = NEW.group_id AND peer_id != NEW.peer_id
+      ) >= 8
+      BEGIN
+        SELECT RAISE(ABORT, 'Group member limit of 8 exceeded');
+      END;
+    ''');
+    await customStatement('''
+      CREATE TRIGGER IF NOT EXISTS trg_group_members_limit_update
+      BEFORE UPDATE OF peer_id, group_id ON group_members_table
+      WHEN (
+        SELECT COUNT(DISTINCT peer_id)
+        FROM group_members_table
+        WHERE group_id = NEW.group_id AND peer_id != NEW.peer_id
+      ) >= 8
+      BEGIN
+        SELECT RAISE(ABORT, 'Group member limit of 8 exceeded');
+      END;
+    ''');
+  }
 
   static QueryExecutor _openConnection() {
     return driftDatabase(name: 'meshlink_messages.db');
@@ -516,6 +630,100 @@ class AppDatabase extends _$AppDatabase {
           ..where((t) =>
               t.transferId.equals(transferId) &
               t.chunkIndex.equals(chunkIndex)))
+        .go();
+  }
+
+  // --- Group and Group Member Operations ---
+
+  /// Maximum number of distinct members permitted per group (including creator).
+  static const int maxGroupMembers = 8;
+
+  /// Insert or replace a group record.
+  Future<int> insertGroup(GroupsTableCompanion entry) {
+    return into(groupsTable).insertOnConflictUpdate(entry);
+  }
+
+  /// Retrieve a group by groupId.
+  Future<GroupEntry?> getGroup(String groupId) {
+    return (select(groupsTable)..where((t) => t.groupId.equals(groupId)))
+        .getSingleOrNull();
+  }
+
+  /// Get all groups, ordered by createdAt descending.
+  Future<List<GroupEntry>> getAllGroups() {
+    return (select(groupsTable)
+          ..orderBy([(t) => OrderingTerm.desc(t.createdAt)]))
+        .get();
+  }
+
+  /// Delete a group by groupId.
+  ///
+  /// Referential integrity policy: Cascades to delete all associated records
+  /// in [GroupMembersTable] due to [KeyAction.cascade] foreign-key constraint.
+  Future<int> deleteGroup(String groupId) {
+    return (delete(groupsTable)..where((t) => t.groupId.equals(groupId))).go();
+  }
+
+  /// Inserts or updates a group member record, enforcing the 8-member limit.
+  ///
+  /// Throws [ArgumentError] if adding this peer would cause the group to exceed
+  /// 8 distinct members.
+  Future<int> insertGroupMember(GroupMembersTableCompanion entry) async {
+    final gid = entry.groupId.value;
+    final pid = entry.peerId.value;
+
+    final existingMembers = await getGroupMembers(gid);
+    final isAlreadyMember = existingMembers.any((m) => m.peerId == pid);
+
+    if (!isAlreadyMember) {
+      final distinctPeers = existingMembers.map((m) => m.peerId).toSet();
+      if (distinctPeers.length >= maxGroupMembers) {
+        throw ArgumentError(
+          'Group membership limit exceeded: maximum $maxGroupMembers distinct members allowed '
+          '(attempted to add "$pid" to group "$gid" with ${distinctPeers.length} members).',
+        );
+      }
+    }
+
+    return into(groupMembersTable).insertOnConflictUpdate(entry);
+  }
+
+  /// Retrieve all members of a group, optionally filtering to active only.
+  Future<List<GroupMemberEntry>> getGroupMembers(
+    String groupId, {
+    bool activeOnly = false,
+  }) {
+    final query = select(groupMembersTable)
+      ..where((t) => t.groupId.equals(groupId));
+    if (activeOnly) {
+      query.where((t) => t.status.equals('active'));
+    }
+    query.orderBy([(t) => OrderingTerm.asc(t.joinedAt)]);
+    return query.get();
+  }
+
+  /// Retrieve a specific member of a group.
+  Future<GroupMemberEntry?> getGroupMember(String groupId, String peerId) {
+    return (select(groupMembersTable)
+          ..where((t) => t.groupId.equals(groupId) & t.peerId.equals(peerId)))
+        .getSingleOrNull();
+  }
+
+  /// Update the status of a specific group member.
+  Future<int> updateGroupMemberStatus(
+    String groupId,
+    String peerId,
+    String status,
+  ) {
+    return (update(groupMembersTable)
+          ..where((t) => t.groupId.equals(groupId) & t.peerId.equals(peerId)))
+        .write(GroupMembersTableCompanion(status: Value(status)));
+  }
+
+  /// Delete a specific group member record.
+  Future<int> deleteGroupMember(String groupId, String peerId) {
+    return (delete(groupMembersTable)
+          ..where((t) => t.groupId.equals(groupId) & t.peerId.equals(peerId)))
         .go();
   }
 }
