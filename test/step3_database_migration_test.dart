@@ -6,6 +6,94 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:meshlink/features/messages/data/database/app_database.dart';
 import 'package:meshlink/features/messages/domain/models/group.dart';
 
+class _V3LegacyDatabase extends GeneratedDatabase {
+  _V3LegacyDatabase(super.e);
+
+  @override
+  int get schemaVersion => 3;
+
+  @override
+  List<DatabaseSchemaEntity> get allSchemaEntities => const [];
+
+  @override
+  Iterable<TableInfo<Table, dynamic>> get allTables => const [];
+
+  @override
+  MigrationStrategy get migration => MigrationStrategy(
+    onCreate: (m) async {
+      await customStatement('PRAGMA user_version = 3;');
+      await customStatement('''
+        CREATE TABLE messages_table (
+          message_id TEXT NOT NULL PRIMARY KEY,
+          conversation_id TEXT NOT NULL,
+          sender_id TEXT NOT NULL,
+          receiver_id TEXT NOT NULL,
+          text_content TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          retry_count INTEGER NOT NULL DEFAULT 0
+        );
+      ''');
+      await customStatement('''
+        CREATE TABLE peer_identities_table (
+          peer_id TEXT NOT NULL PRIMARY KEY,
+          identity_public_key TEXT NOT NULL,
+          safety_number TEXT NOT NULL,
+          trust_status TEXT NOT NULL,
+          protocol_version INTEGER NOT NULL DEFAULT 2,
+          first_seen_at INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL
+        );
+      ''');
+      await customStatement('''
+        CREATE TABLE seen_packets_table (
+          replay_key TEXT NOT NULL PRIMARY KEY,
+          packet_type TEXT NOT NULL,
+          origin_id TEXT NOT NULL,
+          received_at INTEGER NOT NULL
+        );
+      ''');
+      await customStatement('CREATE INDEX idx_seen_packets_received_at ON seen_packets_table (received_at);');
+      await customStatement('''
+        CREATE TABLE file_transfers_table (
+          transfer_id TEXT NOT NULL PRIMARY KEY,
+          conversation_id TEXT NOT NULL,
+          peer_id TEXT NOT NULL,
+          direction TEXT NOT NULL,
+          file_name TEXT NOT NULL,
+          file_size INTEGER NOT NULL,
+          mime_type TEXT NOT NULL,
+          file_hash TEXT NOT NULL,
+          local_path TEXT NOT NULL,
+          staging_path TEXT NOT NULL,
+          total_chunks INTEGER NOT NULL,
+          chunk_size INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          CHECK (file_size >= 0),
+          CHECK (total_chunks >= 0),
+          CHECK (chunk_size > 0)
+        );
+      ''');
+      await customStatement('CREATE INDEX idx_file_transfers_peer_id ON file_transfers_table (peer_id);');
+      await customStatement('CREATE INDEX idx_file_transfers_status ON file_transfers_table (status);');
+      await customStatement('CREATE INDEX idx_file_transfers_updated_at ON file_transfers_table (updated_at);');
+      await customStatement('''
+        CREATE TABLE file_chunks_table (
+          transfer_id TEXT NOT NULL,
+          chunk_index INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          received_at INTEGER NOT NULL,
+          PRIMARY KEY (transfer_id, chunk_index),
+          CHECK (chunk_index >= 0)
+        );
+      ''');
+      await customStatement('CREATE INDEX idx_file_chunks_transfer_id ON file_chunks_table (transfer_id);');
+    },
+  );
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   driftRuntimeOptions.dontWarnAboutMultipleDatabases = true;
@@ -24,8 +112,12 @@ void main() {
     });
 
     // Test 1: Fresh database creates the new tables and reports schemaVersion 4
-    test('1. Fresh database creates groups_table and group_members_table with schemaVersion 4', () async {
+    test('1. Fresh database creates groups_table and group_members_table with schemaVersion 4 and foreign keys enabled', () async {
       expect(db.schemaVersion, 4);
+
+      // Verify PRAGMA foreign_keys is enabled
+      final fkResult = await db.customSelect('PRAGMA foreign_keys;').getSingle();
+      expect(fkResult.data.values.first, 1);
 
       // Verify groups_table exists and accepts queries
       final groups = await db.getAllGroups();
@@ -36,80 +128,72 @@ void main() {
       expect(members, isEmpty);
     });
 
-    // Test 2 & 3: Migration from v3 to v4 preserves existing data and creates new tables
-    test('2 & 3. Existing schema v3 migrates safely to v4 with existing data 100% intact', () async {
+    // Test 2 & 3: Migration from genuine v3 to v4 preserves existing data and creates new tables
+    test('2 & 3. Existing genuine schema v3 migrates safely to v4 with existing data 100% intact', () async {
       final tempDir = await Directory.systemTemp.createTemp('meshlink_db_migration_test_');
       final dbFile = File('${tempDir.path}/v3_migrating_to_v4.db');
 
       try {
-        // Step A: Manually construct a valid Schema v3 SQLite database
-        final rawV3Db = NativeDatabase(dbFile);
-        final v3Database = AppDatabase(rawV3Db);
+        // Step A: Construct a genuine Schema v3 SQLite database on disk
+        final v3Database = _V3LegacyDatabase(NativeDatabase(dbFile));
 
-        // Populate all existing v3 tables
-        await v3Database.insertMessage(
-          MessagesTableCompanion.insert(
-            messageId: 'MSG-V3-001',
-            conversationId: 'PEER-V3-ALICE',
-            senderId: 'PEER-V3-ALICE',
-            receiverId: 'LOCAL-NODE',
-            textContent: 'Historic 1-to-1 message from v3',
-            createdAt: testNow,
-            status: 'delivered',
-          ),
-        );
+        // Populate all existing v3 tables using custom statements
+        final nowUnixSecs = testNow.millisecondsSinceEpoch ~/ 1000;
+        await v3Database.customStatement('''
+          INSERT INTO messages_table (message_id, conversation_id, sender_id, receiver_id, text_content, created_at, status, retry_count)
+          VALUES ('MSG-V3-001', 'PEER-V3-ALICE', 'PEER-V3-ALICE', 'LOCAL-NODE', 'Historic 1-to-1 message from v3', $nowUnixSecs, 'delivered', 0);
+        ''');
+        await v3Database.customStatement('''
+          INSERT INTO peer_identities_table (peer_id, identity_public_key, safety_number, trust_status, protocol_version, first_seen_at, last_seen_at)
+          VALUES ('PEER-V3-ALICE', 'b64url_ed25519_alice_key_v3', '654321', 'verified', 2, $nowUnixSecs, $nowUnixSecs);
+        ''');
+        await v3Database.customStatement('''
+          INSERT INTO seen_packets_table (replay_key, packet_type, origin_id, received_at)
+          VALUES ('encrypted_message:PEER-V3-ALICE:MSG-V3-001', 'encrypted_message', 'PEER-V3-ALICE', $nowUnixSecs);
+        ''');
+        await v3Database.customStatement('''
+          INSERT INTO file_transfers_table (transfer_id, conversation_id, peer_id, direction, file_name, file_size, mime_type, file_hash, local_path, staging_path, total_chunks, chunk_size, status, created_at, updated_at)
+          VALUES ('FT-V3-001', 'PEER-V3-ALICE', 'PEER-V3-ALICE', 'incoming', 'v3_doc.pdf', 102400, 'application/pdf', 'sha256-v3-doc-hash', '/downloads/v3_doc.pdf', '/staging/v3_doc.part', 7, 16384, 'completed', $nowUnixSecs, $nowUnixSecs);
+        ''');
+        await v3Database.customStatement('''
+          INSERT INTO file_chunks_table (transfer_id, chunk_index, status, received_at)
+          VALUES ('FT-V3-001', 0, 'verified', $nowUnixSecs);
+        ''');
 
-        await v3Database.savePeerIdentity(
-          PeerIdentitiesTableCompanion.insert(
-            peerId: 'PEER-V3-ALICE',
-            identityPublicKey: 'b64url_ed25519_alice_key_v3',
-            safetyNumber: '654321',
-            trustStatus: 'verified',
-            firstSeenAt: testNow,
-            lastSeenAt: testNow,
-          ),
-        );
+        // Verify pre-migration state: user_version is 3, group tables and triggers do NOT exist
+        final versionRows = await v3Database.customSelect('PRAGMA user_version;').getSingle();
+        expect(versionRows.data.values.first, 3);
 
-        await v3Database.checkAndMarkSeen(
-          packetType: 'encrypted_message',
-          originId: 'PEER-V3-ALICE',
-          packetId: 'MSG-V3-001',
-          receivedAt: testNow,
-        );
-
-        await v3Database.insertFileTransfer(
-          FileTransfersTableCompanion.insert(
-            transferId: 'FT-V3-001',
-            conversationId: 'PEER-V3-ALICE',
-            peerId: 'PEER-V3-ALICE',
-            direction: 'incoming',
-            fileName: 'v3_doc.pdf',
-            fileSize: BigInt.from(102400),
-            mimeType: 'application/pdf',
-            fileHash: 'sha256-v3-doc-hash',
-            localPath: '/downloads/v3_doc.pdf',
-            stagingPath: '/staging/v3_doc.part',
-            totalChunks: 7,
-            chunkSize: 16384,
-            status: 'completed',
-            createdAt: testNow,
-            updatedAt: testNow,
-          ),
-        );
-
-        await v3Database.markChunkReceived(
-          'FT-V3-001',
-          0,
-          status: 'verified',
-          receivedAt: testNow,
-        );
+        final tablesBefore = (await v3Database.customSelect("SELECT name FROM sqlite_master WHERE type='table';").get())
+            .map((r) => r.data['name'] as String)
+            .toSet();
+        expect(tablesBefore.contains('groups_table'), isFalse);
+        expect(tablesBefore.contains('group_members_table'), isFalse);
 
         await v3Database.close();
 
-        // Step B: Re-open the database with AppDatabase (which triggers migration from v3 to v4)
+        // Step B: Re-open the genuine v3 database with AppDatabase (which triggers migration from v3 to v4)
         final upgradedDb = AppDatabase(NativeDatabase(dbFile));
 
         expect(upgradedDb.schemaVersion, 4);
+
+        // Verify that Drift ran onUpgrade and updated user_version to 4
+        final versionAfter = await upgradedDb.customSelect('PRAGMA user_version;').getSingle();
+        expect(versionAfter.data.values.first, 4);
+
+        // Verify that groups_table and group_members_table now exist
+        final tablesAfter = (await upgradedDb.customSelect("SELECT name FROM sqlite_master WHERE type='table';").get())
+            .map((r) => r.data['name'] as String)
+            .toSet();
+        expect(tablesAfter.contains('groups_table'), isTrue);
+        expect(tablesAfter.contains('group_members_table'), isTrue);
+
+        // Verify that triggers trg_group_members_limit and trg_group_members_limit_update exist
+        final triggers = (await upgradedDb.customSelect("SELECT name FROM sqlite_master WHERE type='trigger';").get())
+            .map((r) => r.data['name'] as String)
+            .toSet();
+        expect(triggers.contains('trg_group_members_limit'), isTrue);
+        expect(triggers.contains('trg_group_members_limit_update'), isTrue);
 
         // Verify existing MessagesTable data is unchanged
         final messages = await upgradedDb.getMessagesForConversation('PEER-V3-ALICE');
@@ -437,8 +521,8 @@ void main() {
       );
     });
 
-    // Test 10: Maximum group size of 8 distinct members is strictly enforced
-    test('10. Maximum group size of 8 distinct members is strictly enforced at database boundary', () async {
+    // Test 10: Maximum group size of 8 distinct active/pending members is strictly enforced
+    test('10. Maximum group size of 8 distinct members is strictly enforced under active-membership policy', () async {
       await db.insertGroup(
         GroupsTableCompanion.insert(
           groupId: 'GRP-1730000000006-DDDDDD',
@@ -464,10 +548,10 @@ void main() {
         );
       }
 
-      final members = await db.getGroupMembers('GRP-1730000000006-DDDDDD');
-      expect(members.length, 8);
+      final activeMembers = await db.getGroupMembers('GRP-1730000000006-DDDDDD', activeOnly: true);
+      expect(activeMembers.length, 8);
 
-      // Inserting a 9th distinct member via insertGroupMember throws ArgumentError
+      // Inserting a 9th distinct member as 'active' via insertGroupMember throws ArgumentError
       expect(
         () async => db.insertGroupMember(
           GroupMembersTableCompanion.insert(
@@ -475,6 +559,21 @@ void main() {
             peerId: 'ML-PEER-9',
             role: 'member',
             status: 'active',
+            joinedAt: testNow,
+            invitedBy: 'ML-CREATOR',
+          ),
+        ),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      // Inserting a 9th distinct member as 'pendingInvite' via insertGroupMember throws ArgumentError
+      expect(
+        () async => db.insertGroupMember(
+          GroupMembersTableCompanion.insert(
+            groupId: 'GRP-1730000000006-DDDDDD',
+            peerId: 'ML-PEER-9',
+            role: 'member',
+            status: 'pendingInvite',
             joinedAt: testNow,
             invitedBy: 'ML-CREATOR',
           ),
@@ -497,10 +596,52 @@ void main() {
         throwsA(isA<SqliteException>()),
       );
 
-      // Updating an existing member among the 8 succeeds
+      // Updating an existing member to 'removed' succeeds and frees an active slot
       await db.updateGroupMemberStatus('GRP-1730000000006-DDDDDD', 'ML-PEER-2', 'removed');
       final updatedPeer2 = await db.getGroupMember('GRP-1730000000006-DDDDDD', 'ML-PEER-2');
       expect(updatedPeer2!.status, 'removed');
+
+      final activeAfterRemoval = await db.getGroupMembers('GRP-1730000000006-DDDDDD', activeOnly: true);
+      expect(activeAfterRemoval.length, 7);
+
+      // Inserting a replacement member now succeeds (7 + 1 = 8 active members, 1 removed member, 9 total rows)
+      await db.insertGroupMember(
+        GroupMembersTableCompanion.insert(
+          groupId: 'GRP-1730000000006-DDDDDD',
+          peerId: 'ML-PEER-REPLACEMENT',
+          role: 'member',
+          status: 'active',
+          joinedAt: testNow,
+          invitedBy: 'ML-CREATOR',
+        ),
+      );
+
+      final totalRows = await db.getGroupMembers('GRP-1730000000006-DDDDDD');
+      expect(totalRows.length, 9);
+      final activeNow = await db.getGroupMembers('GRP-1730000000006-DDDDDD', activeOnly: true);
+      expect(activeNow.length, 8);
+
+      // Now with 8 active members, re-activating the removed member 'ML-PEER-2' fails in Dart
+      expect(
+        () async => db.updateGroupMemberStatus('GRP-1730000000006-DDDDDD', 'ML-PEER-2', 'active'),
+        throwsA(isA<ArgumentError>()),
+      );
+
+      // Raw SQL update to re-activate 'ML-PEER-2' is blocked by SQLite trigger
+      expect(
+        () async => db.customStatement(
+          "UPDATE group_members_table SET status = 'active' WHERE group_id = 'GRP-1730000000006-DDDDDD' AND peer_id = 'ML-PEER-2';",
+        ),
+        throwsA(isA<SqliteException>()),
+      );
+
+      // Removing another member frees an active slot
+      await db.updateGroupMemberStatus('GRP-1730000000006-DDDDDD', 'ML-PEER-3', 'removed');
+
+      // Now re-activating 'ML-PEER-2' succeeds
+      await db.updateGroupMemberStatus('GRP-1730000000006-DDDDDD', 'ML-PEER-2', 'active');
+      final reactivatedPeer2 = await db.getGroupMember('GRP-1730000000006-DDDDDD', 'ML-PEER-2');
+      expect(reactivatedPeer2!.status, 'active');
     });
 
     // Test 11: Existing database operations coexist cleanly with new group tables

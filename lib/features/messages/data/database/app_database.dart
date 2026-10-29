@@ -300,10 +300,12 @@ class AppDatabase extends _$AppDatabase {
     await customStatement('''
       CREATE TRIGGER IF NOT EXISTS trg_group_members_limit
       BEFORE INSERT ON group_members_table
-      WHEN (
+      WHEN NEW.status != 'removed' AND (
         SELECT COUNT(DISTINCT peer_id)
         FROM group_members_table
-        WHERE group_id = NEW.group_id AND peer_id != NEW.peer_id
+        WHERE group_id = NEW.group_id
+          AND status != 'removed'
+          AND peer_id != NEW.peer_id
       ) >= 8
       BEGIN
         SELECT RAISE(ABORT, 'Group member limit of 8 exceeded');
@@ -311,11 +313,13 @@ class AppDatabase extends _$AppDatabase {
     ''');
     await customStatement('''
       CREATE TRIGGER IF NOT EXISTS trg_group_members_limit_update
-      BEFORE UPDATE OF peer_id, group_id ON group_members_table
-      WHEN (
+      BEFORE UPDATE OF peer_id, group_id, status ON group_members_table
+      WHEN NEW.status != 'removed' AND (
         SELECT COUNT(DISTINCT peer_id)
         FROM group_members_table
-        WHERE group_id = NEW.group_id AND peer_id != NEW.peer_id
+        WHERE group_id = NEW.group_id
+          AND status != 'removed'
+          AND peer_id != NEW.peer_id
       ) >= 8
       BEGIN
         SELECT RAISE(ABORT, 'Group member limit of 8 exceeded');
@@ -664,23 +668,26 @@ class AppDatabase extends _$AppDatabase {
     return (delete(groupsTable)..where((t) => t.groupId.equals(groupId))).go();
   }
 
-  /// Inserts or updates a group member record, enforcing the 8-member limit.
+  /// Inserts or updates a group member record, enforcing the active 8-member limit.
   ///
-  /// Throws [ArgumentError] if adding this peer would cause the group to exceed
-  /// 8 distinct members.
+  /// Throws [ArgumentError] if adding or re-activating this peer would cause the group
+  /// to exceed 8 distinct active/pending members.
   Future<int> insertGroupMember(GroupMembersTableCompanion entry) async {
     final gid = entry.groupId.value;
     final pid = entry.peerId.value;
+    final status = entry.status.present ? entry.status.value : 'active';
 
-    final existingMembers = await getGroupMembers(gid);
-    final isAlreadyMember = existingMembers.any((m) => m.peerId == pid);
+    if (status != 'removed') {
+      final existingMembers = await getGroupMembers(gid);
+      final activePeers = existingMembers
+          .where((m) => m.status != 'removed' && m.peerId != pid)
+          .map((m) => m.peerId)
+          .toSet();
 
-    if (!isAlreadyMember) {
-      final distinctPeers = existingMembers.map((m) => m.peerId).toSet();
-      if (distinctPeers.length >= maxGroupMembers) {
+      if (activePeers.length >= maxGroupMembers) {
         throw ArgumentError(
-          'Group membership limit exceeded: maximum $maxGroupMembers distinct members allowed '
-          '(attempted to add "$pid" to group "$gid" with ${distinctPeers.length} members).',
+          'Group membership limit exceeded: maximum $maxGroupMembers distinct active/pending members allowed '
+          '(attempted to add "$pid" with status "$status" to group "$gid" with ${activePeers.length} active/pending members).',
         );
       }
     }
@@ -709,12 +716,30 @@ class AppDatabase extends _$AppDatabase {
         .getSingleOrNull();
   }
 
-  /// Update the status of a specific group member.
+  /// Update the status of a specific group member, enforcing the active 8-member limit.
+  ///
+  /// Throws [ArgumentError] if transitioning from 'removed' to an active/pending status
+  /// when the group already has 8 active/pending members.
   Future<int> updateGroupMemberStatus(
     String groupId,
     String peerId,
     String status,
-  ) {
+  ) async {
+    if (status != 'removed') {
+      final existingMembers = await getGroupMembers(groupId);
+      final activePeers = existingMembers
+          .where((m) => m.status != 'removed' && m.peerId != peerId)
+          .map((m) => m.peerId)
+          .toSet();
+
+      if (activePeers.length >= maxGroupMembers) {
+        throw ArgumentError(
+          'Group membership limit exceeded: maximum $maxGroupMembers distinct active/pending members allowed '
+          '(attempted to set status to "$status" for "$peerId" in group "$groupId" with ${activePeers.length} active/pending members).',
+        );
+      }
+    }
+
     return (update(groupMembersTable)
           ..where((t) => t.groupId.equals(groupId) & t.peerId.equals(peerId)))
         .write(GroupMembersTableCompanion(status: Value(status)));
