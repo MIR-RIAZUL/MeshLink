@@ -108,6 +108,10 @@ class Group {
     required this.creatorId,
     required this.adminId,
     this.epoch = 1,
+    this.isReEpochPending = false,
+    this.activeReEpochOperationId,
+    this.preparedEpoch,
+    this.operationSequenceNumber = 0,
     required this.createdAt,
     required this.updatedAt,
   }) : name = validateAndSanitizeName(name) {
@@ -117,6 +121,22 @@ class Group {
 
     if (epoch < 1) {
       throw ArgumentError('epoch must be an integer >= 1 (got $epoch).');
+    }
+    if (operationSequenceNumber < 0) {
+      throw ArgumentError(
+        'operationSequenceNumber must be >= 0 (got $operationSequenceNumber).',
+      );
+    }
+    if (preparedEpoch != null && preparedEpoch! < 1) {
+      throw ArgumentError('preparedEpoch must be >= 1 (got $preparedEpoch).');
+    }
+    if (activeReEpochOperationId != null && activeReEpochOperationId!.isNotEmpty) {
+      if (activeReEpochOperationId!.trim() != activeReEpochOperationId!) {
+        throw ArgumentError('activeReEpochOperationId must not contain whitespace.');
+      }
+      if (!RegExp(r'^[0-9a-fA-F]{32}$').hasMatch(activeReEpochOperationId!)) {
+        throw ArgumentError('Invalid activeReEpochOperationId format.');
+      }
     }
 
     if (!createdAt.isUtc) {
@@ -176,6 +196,18 @@ class Group {
 
   /// Monotonically increasing membership epoch (starts at 1).
   final int epoch;
+
+  /// True if an administrative re-epoch operation is pending for this group.
+  final bool isReEpochPending;
+
+  /// Active 128-bit re-epoch operation identifier (nullable).
+  final String? activeReEpochOperationId;
+
+  /// Target epoch prepared by members during re-epoching (nullable).
+  final int? preparedEpoch;
+
+  /// Monotonically increasing operation sequence number for this group.
+  final int operationSequenceNumber;
 
   /// UTC creation timestamp.
   final DateTime createdAt;
@@ -260,6 +292,10 @@ class Group {
     String? creatorId,
     String? adminId,
     int? epoch,
+    bool? isReEpochPending,
+    String? activeReEpochOperationId,
+    int? preparedEpoch,
+    int? operationSequenceNumber,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) {
@@ -269,6 +305,12 @@ class Group {
       creatorId: creatorId ?? this.creatorId,
       adminId: adminId ?? this.adminId,
       epoch: epoch ?? this.epoch,
+      isReEpochPending: isReEpochPending ?? this.isReEpochPending,
+      activeReEpochOperationId:
+          activeReEpochOperationId ?? this.activeReEpochOperationId,
+      preparedEpoch: preparedEpoch ?? this.preparedEpoch,
+      operationSequenceNumber:
+          operationSequenceNumber ?? this.operationSequenceNumber,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
     );
@@ -280,6 +322,10 @@ class Group {
     'creatorId': creatorId,
     'adminId': adminId,
     'epoch': epoch,
+    'isReEpochPending': isReEpochPending,
+    'activeReEpochOperationId': activeReEpochOperationId,
+    'preparedEpoch': preparedEpoch,
+    'operationSequenceNumber': operationSequenceNumber,
     'createdAt': createdAt.toIso8601String(),
     'updatedAt': updatedAt.toIso8601String(),
   };
@@ -312,6 +358,11 @@ class Group {
       throw const FormatException('Missing or invalid type for "epoch" (expected int).');
     }
 
+    final rawIsPending = map['isReEpochPending'] as bool? ?? false;
+    final rawActiveOpId = map['activeReEpochOperationId'] as String?;
+    final rawPreparedEpoch = map['preparedEpoch'] as int?;
+    final rawSeqNum = map['operationSequenceNumber'] as int? ?? 0;
+
     final rawCreatedAt = map['createdAt'];
     if (rawCreatedAt is! String) {
       throw const FormatException('Missing or invalid type for "createdAt" (expected String).');
@@ -339,6 +390,10 @@ class Group {
         creatorId: rawCreatorId,
         adminId: rawAdminId,
         epoch: rawEpoch,
+        isReEpochPending: rawIsPending,
+        activeReEpochOperationId: rawActiveOpId,
+        preparedEpoch: rawPreparedEpoch,
+        operationSequenceNumber: rawSeqNum,
         createdAt: parsedCreatedAt,
         updatedAt: parsedUpdatedAt,
       );
@@ -365,6 +420,10 @@ class Group {
           creatorId == other.creatorId &&
           adminId == other.adminId &&
           epoch == other.epoch &&
+          isReEpochPending == other.isReEpochPending &&
+          activeReEpochOperationId == other.activeReEpochOperationId &&
+          preparedEpoch == other.preparedEpoch &&
+          operationSequenceNumber == other.operationSequenceNumber &&
           createdAt == other.createdAt &&
           updatedAt == other.updatedAt;
 
@@ -375,13 +434,17 @@ class Group {
     creatorId,
     adminId,
     epoch,
+    isReEpochPending,
+    activeReEpochOperationId,
+    preparedEpoch,
+    operationSequenceNumber,
     createdAt,
     updatedAt,
   );
 
   @override
   String toString() =>
-      'Group(id: $groupId, name: "$name", admin: $adminId, epoch: $epoch)';
+      'Group(id: $groupId, name: "$name", admin: $adminId, epoch: $epoch, pending: $isReEpochPending, seq: $operationSequenceNumber)';
 }
 
 /// Immutable domain model representing a group member.

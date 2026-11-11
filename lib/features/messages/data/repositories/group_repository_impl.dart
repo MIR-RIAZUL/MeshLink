@@ -328,6 +328,10 @@ class DriftGroupRepository implements GroupRepository {
         creatorId: entry.creatorId,
         adminId: entry.adminId,
         epoch: entry.epoch,
+        isReEpochPending: entry.isReEpochPending,
+        activeReEpochOperationId: entry.activeReEpochOperationId,
+        preparedEpoch: entry.preparedEpoch,
+        operationSequenceNumber: entry.operationSequenceNumber,
         createdAt: entry.createdAt.toUtc(),
         updatedAt: entry.updatedAt.toUtc(),
       );
@@ -345,6 +349,10 @@ class DriftGroupRepository implements GroupRepository {
       creatorId: group.creatorId,
       adminId: group.adminId,
       epoch: Value(group.epoch),
+      isReEpochPending: Value(group.isReEpochPending),
+      activeReEpochOperationId: Value(group.activeReEpochOperationId),
+      preparedEpoch: Value(group.preparedEpoch),
+      operationSequenceNumber: Value(group.operationSequenceNumber),
       createdAt: group.createdAt.toUtc(),
       updatedAt: group.updatedAt.toUtc(),
     );

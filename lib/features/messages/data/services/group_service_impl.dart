@@ -88,7 +88,9 @@ class GroupServiceImpl implements GroupService {
   }
 
   @override
-  Future<bool> canSendGroupMessages(String groupId, String peerId) {
+  Future<bool> canSendGroupMessages(String groupId, String peerId) async {
+    final group = await _repo.getGroup(groupId);
+    if (group == null || group.isReEpochPending) return false;
     return isActiveMember(groupId, peerId);
   }
 
