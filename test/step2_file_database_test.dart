@@ -19,9 +19,9 @@ void main() {
       await db.close();
     });
 
-    // Test 1: Schema version is 4
-    test('Test 1: Schema version is 4', () {
-      expect(db.schemaVersion, 4);
+    // Test 1: Schema version is 5 (updated from 4 for schema v5)
+    test('Test 1: Schema version is 5', () {
+      expect(db.schemaVersion, 5);
     });
 
     // Test 2: File transfer can be inserted

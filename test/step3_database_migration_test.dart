@@ -111,9 +111,9 @@ void main() {
       await db.close();
     });
 
-    // Test 1: Fresh database creates the new tables and reports schemaVersion 4
-    test('1. Fresh database creates groups_table and group_members_table with schemaVersion 4 and foreign keys enabled', () async {
-      expect(db.schemaVersion, 4);
+    // Test 1: Fresh database creates the new tables and reports schemaVersion 5
+    test('1. Fresh database creates groups_table and group_members_table with schemaVersion 5 and foreign keys enabled', () async {
+      expect(db.schemaVersion, 5);
 
       // Verify PRAGMA foreign_keys is enabled
       final fkResult = await db.customSelect('PRAGMA foreign_keys;').getSingle();
@@ -172,14 +172,14 @@ void main() {
 
         await v3Database.close();
 
-        // Step B: Re-open the genuine v3 database with AppDatabase (which triggers migration from v3 to v4)
+        // Step B: Re-open the genuine v3 database with AppDatabase (which triggers migration from v3 to current schema version 5)
         final upgradedDb = AppDatabase(NativeDatabase(dbFile));
 
-        expect(upgradedDb.schemaVersion, 4);
+        expect(upgradedDb.schemaVersion, 5);
 
-        // Verify that Drift ran onUpgrade and updated user_version to 4
+        // Verify that Drift ran onUpgrade and updated user_version to 5
         final versionAfter = await upgradedDb.customSelect('PRAGMA user_version;').getSingle();
-        expect(versionAfter.data.values.first, 4);
+        expect(versionAfter.data.values.first, 5);
 
         // Verify that groups_table and group_members_table now exist
         final tablesAfter = (await upgradedDb.customSelect("SELECT name FROM sqlite_master WHERE type='table';").get())

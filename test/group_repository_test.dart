@@ -811,6 +811,8 @@ void main() {
           creatorId: 'PEER-CREATOR',
           adminId: 'PEER-CREATOR',
           epoch: 0, // Invalid epoch < 1
+          isReEpochPending: false,
+          operationSequenceNumber: 0,
           createdAt: testNow,
           updatedAt: testNow,
         );

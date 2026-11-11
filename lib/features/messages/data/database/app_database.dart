@@ -196,6 +196,20 @@ class GroupsTable extends Table {
   /// Monotonically increasing membership epoch (starts at 1).
   IntColumn get epoch => integer().withDefault(const Constant(1))();
 
+  /// Whether an administrative re-epoch operation is pending for this group.
+  BoolColumn get isReEpochPending =>
+      boolean().withDefault(const Constant(false))();
+
+  /// Active 128-bit re-epoch operation identifier (nullable).
+  TextColumn get activeReEpochOperationId => text().nullable()();
+
+  /// Target epoch prepared by members during re-epoching (nullable).
+  IntColumn get preparedEpoch => integer().nullable()();
+
+  /// Monotonically increasing operation sequence number for this group.
+  IntColumn get operationSequenceNumber =>
+      integer().withDefault(const Constant(0))();
+
   /// Creation timestamp in UTC.
   DateTimeColumn get createdAt => dateTime()();
 
@@ -214,6 +228,7 @@ class GroupsTable extends Table {
   List<String> get customConstraints => [
     'CHECK (epoch >= 1)',
     'CHECK (length(name) >= 1 AND length(name) <= 64)',
+    'CHECK (operation_sequence_number >= 0)',
   ];
 }
 
@@ -254,6 +269,183 @@ class GroupMembersTable extends Table {
   ];
 }
 
+/// Table persisting the lifecycle and authoritative history of each administrative re-epoch operation.
+@DataClassName('GroupEpochOperationEntry')
+@TableIndex(name: 'idx_epoch_ops_group_id', columns: {#groupId})
+@TableIndex(name: 'idx_epoch_ops_status', columns: {#operationStatus})
+@TableIndex(name: 'idx_epoch_ops_group_seq', columns: {#groupId, #operationSequenceNumber})
+class GroupEpochOperationsTable extends Table {
+  /// Unique 128-bit operation identifier (e.g. RE-OP-<32 hex chars>).
+  TextColumn get operationId => text()();
+
+  /// Foreign key referencing groups_table(group_id).
+  TextColumn get groupId => text().customConstraint(
+      'NOT NULL REFERENCES groups_table(group_id) ON DELETE CASCADE')();
+
+  /// Epoch before this operation began.
+  IntColumn get previousEpoch => integer()();
+
+  /// Epoch targeted by this operation (strictly > previousEpoch).
+  IntColumn get targetEpoch => integer()();
+
+  /// Strictly positive, monotonically increasing operation sequence number.
+  IntColumn get operationSequenceNumber => integer()();
+
+  /// Current lifecycle status: preparing, committing, finalizing, finalized, superseded.
+  TextColumn get operationStatus => text()();
+
+  /// UTC creation timestamp.
+  DateTimeColumn get createdAt => dateTime()();
+
+  /// UTC last updated timestamp.
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {operationId};
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+    {operationId, groupId},
+  ];
+
+  @override
+  List<String> get customConstraints => [
+    'CHECK (target_epoch > previous_epoch)',
+    'CHECK (operation_sequence_number > 0)',
+    "CHECK (operation_status IN ('preparing', 'committing', 'finalizing', 'finalized', 'superseded'))",
+  ];
+}
+
+/// Table persisting per-member synchronization progress for a particular re-epoch operation.
+@DataClassName('GroupEpochSyncEntry')
+@TableIndex(name: 'idx_epoch_sync_group_member', columns: {#groupId, #memberPeerId})
+@TableIndex(name: 'idx_epoch_sync_prepare', columns: {#operationId, #prepareStatus})
+@TableIndex(name: 'idx_epoch_sync_commit', columns: {#operationId, #commitStatus})
+@TableIndex(name: 'idx_epoch_sync_finalize', columns: {#operationId, #finalizeStatus})
+class GroupEpochSyncTable extends Table {
+  /// Operation identifier referencing group_epoch_operations_table.
+  TextColumn get operationId => text()();
+
+  /// Group identifier referencing matching operation group.
+  TextColumn get groupId => text()();
+
+  /// Peer device identifier of the group member.
+  TextColumn get memberPeerId => text()();
+
+  /// Phase 1 prepare status: pending, acknowledged, failed.
+  TextColumn get prepareStatus => text().withDefault(const Constant('pending'))();
+
+  /// Phase 2 commit status: pending, acknowledged, failed.
+  TextColumn get commitStatus => text().withDefault(const Constant('pending'))();
+
+  /// Phase 3 finalize status: pending, acknowledged, failed.
+  TextColumn get finalizeStatus => text().withDefault(const Constant('pending'))();
+
+  /// UTC last updated timestamp.
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  Set<Column> get primaryKey => {operationId, memberPeerId};
+
+  @override
+  List<String> get customConstraints => [
+    'FOREIGN KEY (operation_id, group_id) REFERENCES group_epoch_operations_table(operation_id, group_id) ON DELETE CASCADE',
+    "CHECK (prepare_status IN ('pending', 'acknowledged', 'failed'))",
+    "CHECK (commit_status IN ('pending', 'acknowledged', 'failed'))",
+    "CHECK (finalize_status IN ('pending', 'acknowledged', 'failed'))",
+  ];
+}
+
+/// Table retaining group-message source payloads independently from the ordinary MessagesTable.
+@DataClassName('GroupMessagePayloadEntry')
+@TableIndex(name: 'idx_payloads_created_at', columns: {#createdAt})
+@TableIndex(name: 'idx_payloads_expires_at', columns: {#expiresAt})
+class GroupMessagePayloadsTable extends Table {
+  /// Target group identifier, referencing GroupsTable.
+  TextColumn get groupId => text().customConstraint(
+      'NOT NULL REFERENCES groups_table(group_id) ON DELETE CASCADE')();
+
+  /// Unique message identifier.
+  TextColumn get messageId => text()();
+
+  /// Binary encrypted-at-rest payload (never plaintext).
+  BlobColumn get encryptedPayload => blob()();
+
+  /// Binary initialization vector / nonce used for local AEAD encryption.
+  BlobColumn get nonce => blob()();
+
+  /// UTC creation timestamp.
+  DateTimeColumn get createdAt => dateTime()();
+
+  /// Optional UTC expiration timestamp for retention pruning.
+  DateTimeColumn get expiresAt => dateTime().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {groupId, messageId};
+}
+
+/// Table persisting recipient-specific encrypted delivery envelopes.
+@DataClassName('GroupDeliveryQueueEntry')
+@TableIndex(name: 'idx_group_queue_recipient_status', columns: {#recipientPeerId, #status})
+@TableIndex(name: 'idx_group_queue_group_epoch', columns: {#groupId, #epoch})
+@TableIndex(name: 'idx_group_queue_retry', columns: {#status, #nextRetryAt})
+class GroupDeliveryQueueTable extends Table {
+  /// Unique queue record auto-incrementing identifier.
+  IntColumn get queueId => integer().autoIncrement()();
+
+  /// Group identifier.
+  TextColumn get groupId => text()();
+
+  /// Unique message identifier.
+  TextColumn get messageId => text()();
+
+  /// Peer device identifier of recipient.
+  TextColumn get recipientPeerId => text()();
+
+  /// Group epoch at the time of encryption.
+  IntColumn get epoch => integer()();
+
+  /// Packet type discriminator (e.g. group_message).
+  TextColumn get packetType => text()();
+
+  /// Active pairwise session identifier (nullable if not yet connected).
+  TextColumn get sessionId => text().nullable()();
+
+  /// Recipient-specific encrypted wire envelope JSON (never plaintext message content).
+  TextColumn get encryptedEnvelopeJson => text()();
+
+  /// Delivery lifecycle status.
+  TextColumn get status => text().withDefault(const Constant('pending'))();
+
+  /// Failure reason discriminator (nullable).
+  TextColumn get failureReason => text().nullable()();
+
+  /// Number of transmission retries attempted.
+  IntColumn get retryCount => integer().withDefault(const Constant(0))();
+
+  /// Next eligible delivery attempt timestamp (UTC).
+  DateTimeColumn get nextRetryAt => dateTime().nullable()();
+
+  /// UTC creation timestamp.
+  DateTimeColumn get createdAt => dateTime()();
+
+  /// UTC last updated timestamp.
+  DateTimeColumn get updatedAt => dateTime()();
+
+  @override
+  List<Set<Column>> get uniqueKeys => [
+    {groupId, recipientPeerId, messageId},
+  ];
+
+  @override
+  List<String> get customConstraints => [
+    'FOREIGN KEY (group_id, recipient_peer_id) REFERENCES group_members_table(group_id, peer_id) ON DELETE CASCADE',
+    "CHECK (status IN ('pending', 'sending', 'transport_acked', 'delivered', 'failed', 'cancelled', 'obsolete', 'expired'))",
+    'CHECK (retry_count >= 0)',
+    'CHECK (epoch >= 1)',
+  ];
+}
+
 @DriftDatabase(tables: [
   MessagesTable,
   PeerIdentitiesTable,
@@ -262,13 +454,17 @@ class GroupMembersTable extends Table {
   FileChunksTable,
   GroupsTable,
   GroupMembersTable,
+  GroupEpochOperationsTable,
+  GroupEpochSyncTable,
+  GroupMessagePayloadsTable,
+  GroupDeliveryQueueTable,
 ])
 class AppDatabase extends _$AppDatabase {
   AppDatabase([QueryExecutor? executor])
       : super(executor ?? _openConnection());
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -280,18 +476,56 @@ class AppDatabase extends _$AppDatabase {
       await _createTriggers();
     },
     onUpgrade: (m, from, to) async {
-      if (from < 2) {
+      if (from < 2 && to >= 2) {
         await m.createTable(peerIdentitiesTable);
         await m.createTable(seenPacketsTable);
       }
-      if (from < 3) {
+      if (from < 3 && to >= 3) {
         await m.createTable(fileTransfersTable);
         await m.createTable(fileChunksTable);
       }
-      if (from < 4) {
+      if (from < 4 && to >= 4) {
         await m.createTable(groupsTable);
         await m.createTable(groupMembersTable);
         await _createTriggers();
+      }
+      if (from < 5 && to >= 5) {
+        final existingColumns = (await customSelect('PRAGMA table_info(groups_table);').get())
+            .map((row) => row.data['name'] as String)
+            .toSet();
+
+        if (!existingColumns.contains('is_re_epoch_pending')) {
+          await m.addColumn(groupsTable, groupsTable.isReEpochPending);
+        }
+        if (!existingColumns.contains('active_re_epoch_operation_id')) {
+          await m.addColumn(groupsTable, groupsTable.activeReEpochOperationId);
+        }
+        if (!existingColumns.contains('prepared_epoch')) {
+          await m.addColumn(groupsTable, groupsTable.preparedEpoch);
+        }
+        if (!existingColumns.contains('operation_sequence_number')) {
+          await m.addColumn(groupsTable, groupsTable.operationSequenceNumber);
+        }
+
+        await m.createTable(groupEpochOperationsTable);
+        await m.createIndex(idxEpochOpsGroupId);
+        await m.createIndex(idxEpochOpsStatus);
+        await m.createIndex(idxEpochOpsGroupSeq);
+
+        await m.createTable(groupEpochSyncTable);
+        await m.createIndex(idxEpochSyncGroupMember);
+        await m.createIndex(idxEpochSyncPrepare);
+        await m.createIndex(idxEpochSyncCommit);
+        await m.createIndex(idxEpochSyncFinalize);
+
+        await m.createTable(groupMessagePayloadsTable);
+        await m.createIndex(idxPayloadsCreatedAt);
+        await m.createIndex(idxPayloadsExpiresAt);
+
+        await m.createTable(groupDeliveryQueueTable);
+        await m.createIndex(idxGroupQueueRecipientStatus);
+        await m.createIndex(idxGroupQueueGroupEpoch);
+        await m.createIndex(idxGroupQueueRetry);
       }
     },
   );

@@ -2672,6 +2672,55 @@ class $GroupsTableTable extends GroupsTable
     requiredDuringInsert: false,
     defaultValue: const Constant(1),
   );
+  static const VerificationMeta _isReEpochPendingMeta = const VerificationMeta(
+    'isReEpochPending',
+  );
+  @override
+  late final GeneratedColumn<bool> isReEpochPending = GeneratedColumn<bool>(
+    'is_re_epoch_pending',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_re_epoch_pending" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _activeReEpochOperationIdMeta =
+      const VerificationMeta('activeReEpochOperationId');
+  @override
+  late final GeneratedColumn<String> activeReEpochOperationId =
+      GeneratedColumn<String>(
+        'active_re_epoch_operation_id',
+        aliasedName,
+        true,
+        type: DriftSqlType.string,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _preparedEpochMeta = const VerificationMeta(
+    'preparedEpoch',
+  );
+  @override
+  late final GeneratedColumn<int> preparedEpoch = GeneratedColumn<int>(
+    'prepared_epoch',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _operationSequenceNumberMeta =
+      const VerificationMeta('operationSequenceNumber');
+  @override
+  late final GeneratedColumn<int> operationSequenceNumber =
+      GeneratedColumn<int>(
+        'operation_sequence_number',
+        aliasedName,
+        false,
+        type: DriftSqlType.int,
+        requiredDuringInsert: false,
+        defaultValue: const Constant(0),
+      );
   static const VerificationMeta _createdAtMeta = const VerificationMeta(
     'createdAt',
   );
@@ -2701,6 +2750,10 @@ class $GroupsTableTable extends GroupsTable
     creatorId,
     adminId,
     epoch,
+    isReEpochPending,
+    activeReEpochOperationId,
+    preparedEpoch,
+    operationSequenceNumber,
     createdAt,
     updatedAt,
   ];
@@ -2754,6 +2807,42 @@ class $GroupsTableTable extends GroupsTable
         epoch.isAcceptableOrUnknown(data['epoch']!, _epochMeta),
       );
     }
+    if (data.containsKey('is_re_epoch_pending')) {
+      context.handle(
+        _isReEpochPendingMeta,
+        isReEpochPending.isAcceptableOrUnknown(
+          data['is_re_epoch_pending']!,
+          _isReEpochPendingMeta,
+        ),
+      );
+    }
+    if (data.containsKey('active_re_epoch_operation_id')) {
+      context.handle(
+        _activeReEpochOperationIdMeta,
+        activeReEpochOperationId.isAcceptableOrUnknown(
+          data['active_re_epoch_operation_id']!,
+          _activeReEpochOperationIdMeta,
+        ),
+      );
+    }
+    if (data.containsKey('prepared_epoch')) {
+      context.handle(
+        _preparedEpochMeta,
+        preparedEpoch.isAcceptableOrUnknown(
+          data['prepared_epoch']!,
+          _preparedEpochMeta,
+        ),
+      );
+    }
+    if (data.containsKey('operation_sequence_number')) {
+      context.handle(
+        _operationSequenceNumberMeta,
+        operationSequenceNumber.isAcceptableOrUnknown(
+          data['operation_sequence_number']!,
+          _operationSequenceNumberMeta,
+        ),
+      );
+    }
     if (data.containsKey('created_at')) {
       context.handle(
         _createdAtMeta,
@@ -2799,6 +2888,22 @@ class $GroupsTableTable extends GroupsTable
         DriftSqlType.int,
         data['${effectivePrefix}epoch'],
       )!,
+      isReEpochPending: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_re_epoch_pending'],
+      )!,
+      activeReEpochOperationId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}active_re_epoch_operation_id'],
+      ),
+      preparedEpoch: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}prepared_epoch'],
+      ),
+      operationSequenceNumber: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}operation_sequence_number'],
+      )!,
       createdAt: attachedDatabase.typeMapping.read(
         DriftSqlType.dateTime,
         data['${effectivePrefix}created_at'],
@@ -2832,6 +2937,18 @@ class GroupEntry extends DataClass implements Insertable<GroupEntry> {
   /// Monotonically increasing membership epoch (starts at 1).
   final int epoch;
 
+  /// Whether an administrative re-epoch operation is pending for this group.
+  final bool isReEpochPending;
+
+  /// Active 128-bit re-epoch operation identifier (nullable).
+  final String? activeReEpochOperationId;
+
+  /// Target epoch prepared by members during re-epoching (nullable).
+  final int? preparedEpoch;
+
+  /// Monotonically increasing operation sequence number for this group.
+  final int operationSequenceNumber;
+
   /// Creation timestamp in UTC.
   final DateTime createdAt;
 
@@ -2843,6 +2960,10 @@ class GroupEntry extends DataClass implements Insertable<GroupEntry> {
     required this.creatorId,
     required this.adminId,
     required this.epoch,
+    required this.isReEpochPending,
+    this.activeReEpochOperationId,
+    this.preparedEpoch,
+    required this.operationSequenceNumber,
     required this.createdAt,
     required this.updatedAt,
   });
@@ -2854,6 +2975,16 @@ class GroupEntry extends DataClass implements Insertable<GroupEntry> {
     map['creator_id'] = Variable<String>(creatorId);
     map['admin_id'] = Variable<String>(adminId);
     map['epoch'] = Variable<int>(epoch);
+    map['is_re_epoch_pending'] = Variable<bool>(isReEpochPending);
+    if (!nullToAbsent || activeReEpochOperationId != null) {
+      map['active_re_epoch_operation_id'] = Variable<String>(
+        activeReEpochOperationId,
+      );
+    }
+    if (!nullToAbsent || preparedEpoch != null) {
+      map['prepared_epoch'] = Variable<int>(preparedEpoch);
+    }
+    map['operation_sequence_number'] = Variable<int>(operationSequenceNumber);
     map['created_at'] = Variable<DateTime>(createdAt);
     map['updated_at'] = Variable<DateTime>(updatedAt);
     return map;
@@ -2866,6 +2997,14 @@ class GroupEntry extends DataClass implements Insertable<GroupEntry> {
       creatorId: Value(creatorId),
       adminId: Value(adminId),
       epoch: Value(epoch),
+      isReEpochPending: Value(isReEpochPending),
+      activeReEpochOperationId: activeReEpochOperationId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(activeReEpochOperationId),
+      preparedEpoch: preparedEpoch == null && nullToAbsent
+          ? const Value.absent()
+          : Value(preparedEpoch),
+      operationSequenceNumber: Value(operationSequenceNumber),
       createdAt: Value(createdAt),
       updatedAt: Value(updatedAt),
     );
@@ -2882,6 +3021,14 @@ class GroupEntry extends DataClass implements Insertable<GroupEntry> {
       creatorId: serializer.fromJson<String>(json['creatorId']),
       adminId: serializer.fromJson<String>(json['adminId']),
       epoch: serializer.fromJson<int>(json['epoch']),
+      isReEpochPending: serializer.fromJson<bool>(json['isReEpochPending']),
+      activeReEpochOperationId: serializer.fromJson<String?>(
+        json['activeReEpochOperationId'],
+      ),
+      preparedEpoch: serializer.fromJson<int?>(json['preparedEpoch']),
+      operationSequenceNumber: serializer.fromJson<int>(
+        json['operationSequenceNumber'],
+      ),
       createdAt: serializer.fromJson<DateTime>(json['createdAt']),
       updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
     );
@@ -2895,6 +3042,14 @@ class GroupEntry extends DataClass implements Insertable<GroupEntry> {
       'creatorId': serializer.toJson<String>(creatorId),
       'adminId': serializer.toJson<String>(adminId),
       'epoch': serializer.toJson<int>(epoch),
+      'isReEpochPending': serializer.toJson<bool>(isReEpochPending),
+      'activeReEpochOperationId': serializer.toJson<String?>(
+        activeReEpochOperationId,
+      ),
+      'preparedEpoch': serializer.toJson<int?>(preparedEpoch),
+      'operationSequenceNumber': serializer.toJson<int>(
+        operationSequenceNumber,
+      ),
       'createdAt': serializer.toJson<DateTime>(createdAt),
       'updatedAt': serializer.toJson<DateTime>(updatedAt),
     };
@@ -2906,6 +3061,10 @@ class GroupEntry extends DataClass implements Insertable<GroupEntry> {
     String? creatorId,
     String? adminId,
     int? epoch,
+    bool? isReEpochPending,
+    Value<String?> activeReEpochOperationId = const Value.absent(),
+    Value<int?> preparedEpoch = const Value.absent(),
+    int? operationSequenceNumber,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) => GroupEntry(
@@ -2914,6 +3073,15 @@ class GroupEntry extends DataClass implements Insertable<GroupEntry> {
     creatorId: creatorId ?? this.creatorId,
     adminId: adminId ?? this.adminId,
     epoch: epoch ?? this.epoch,
+    isReEpochPending: isReEpochPending ?? this.isReEpochPending,
+    activeReEpochOperationId: activeReEpochOperationId.present
+        ? activeReEpochOperationId.value
+        : this.activeReEpochOperationId,
+    preparedEpoch: preparedEpoch.present
+        ? preparedEpoch.value
+        : this.preparedEpoch,
+    operationSequenceNumber:
+        operationSequenceNumber ?? this.operationSequenceNumber,
     createdAt: createdAt ?? this.createdAt,
     updatedAt: updatedAt ?? this.updatedAt,
   );
@@ -2924,6 +3092,18 @@ class GroupEntry extends DataClass implements Insertable<GroupEntry> {
       creatorId: data.creatorId.present ? data.creatorId.value : this.creatorId,
       adminId: data.adminId.present ? data.adminId.value : this.adminId,
       epoch: data.epoch.present ? data.epoch.value : this.epoch,
+      isReEpochPending: data.isReEpochPending.present
+          ? data.isReEpochPending.value
+          : this.isReEpochPending,
+      activeReEpochOperationId: data.activeReEpochOperationId.present
+          ? data.activeReEpochOperationId.value
+          : this.activeReEpochOperationId,
+      preparedEpoch: data.preparedEpoch.present
+          ? data.preparedEpoch.value
+          : this.preparedEpoch,
+      operationSequenceNumber: data.operationSequenceNumber.present
+          ? data.operationSequenceNumber.value
+          : this.operationSequenceNumber,
       createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
       updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
     );
@@ -2937,6 +3117,10 @@ class GroupEntry extends DataClass implements Insertable<GroupEntry> {
           ..write('creatorId: $creatorId, ')
           ..write('adminId: $adminId, ')
           ..write('epoch: $epoch, ')
+          ..write('isReEpochPending: $isReEpochPending, ')
+          ..write('activeReEpochOperationId: $activeReEpochOperationId, ')
+          ..write('preparedEpoch: $preparedEpoch, ')
+          ..write('operationSequenceNumber: $operationSequenceNumber, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt')
           ..write(')'))
@@ -2950,6 +3134,10 @@ class GroupEntry extends DataClass implements Insertable<GroupEntry> {
     creatorId,
     adminId,
     epoch,
+    isReEpochPending,
+    activeReEpochOperationId,
+    preparedEpoch,
+    operationSequenceNumber,
     createdAt,
     updatedAt,
   );
@@ -2962,6 +3150,10 @@ class GroupEntry extends DataClass implements Insertable<GroupEntry> {
           other.creatorId == this.creatorId &&
           other.adminId == this.adminId &&
           other.epoch == this.epoch &&
+          other.isReEpochPending == this.isReEpochPending &&
+          other.activeReEpochOperationId == this.activeReEpochOperationId &&
+          other.preparedEpoch == this.preparedEpoch &&
+          other.operationSequenceNumber == this.operationSequenceNumber &&
           other.createdAt == this.createdAt &&
           other.updatedAt == this.updatedAt);
 }
@@ -2972,6 +3164,10 @@ class GroupsTableCompanion extends UpdateCompanion<GroupEntry> {
   final Value<String> creatorId;
   final Value<String> adminId;
   final Value<int> epoch;
+  final Value<bool> isReEpochPending;
+  final Value<String?> activeReEpochOperationId;
+  final Value<int?> preparedEpoch;
+  final Value<int> operationSequenceNumber;
   final Value<DateTime> createdAt;
   final Value<DateTime> updatedAt;
   final Value<int> rowid;
@@ -2981,6 +3177,10 @@ class GroupsTableCompanion extends UpdateCompanion<GroupEntry> {
     this.creatorId = const Value.absent(),
     this.adminId = const Value.absent(),
     this.epoch = const Value.absent(),
+    this.isReEpochPending = const Value.absent(),
+    this.activeReEpochOperationId = const Value.absent(),
+    this.preparedEpoch = const Value.absent(),
+    this.operationSequenceNumber = const Value.absent(),
     this.createdAt = const Value.absent(),
     this.updatedAt = const Value.absent(),
     this.rowid = const Value.absent(),
@@ -2991,6 +3191,10 @@ class GroupsTableCompanion extends UpdateCompanion<GroupEntry> {
     required String creatorId,
     required String adminId,
     this.epoch = const Value.absent(),
+    this.isReEpochPending = const Value.absent(),
+    this.activeReEpochOperationId = const Value.absent(),
+    this.preparedEpoch = const Value.absent(),
+    this.operationSequenceNumber = const Value.absent(),
     required DateTime createdAt,
     required DateTime updatedAt,
     this.rowid = const Value.absent(),
@@ -3006,6 +3210,10 @@ class GroupsTableCompanion extends UpdateCompanion<GroupEntry> {
     Expression<String>? creatorId,
     Expression<String>? adminId,
     Expression<int>? epoch,
+    Expression<bool>? isReEpochPending,
+    Expression<String>? activeReEpochOperationId,
+    Expression<int>? preparedEpoch,
+    Expression<int>? operationSequenceNumber,
     Expression<DateTime>? createdAt,
     Expression<DateTime>? updatedAt,
     Expression<int>? rowid,
@@ -3016,6 +3224,12 @@ class GroupsTableCompanion extends UpdateCompanion<GroupEntry> {
       if (creatorId != null) 'creator_id': creatorId,
       if (adminId != null) 'admin_id': adminId,
       if (epoch != null) 'epoch': epoch,
+      if (isReEpochPending != null) 'is_re_epoch_pending': isReEpochPending,
+      if (activeReEpochOperationId != null)
+        'active_re_epoch_operation_id': activeReEpochOperationId,
+      if (preparedEpoch != null) 'prepared_epoch': preparedEpoch,
+      if (operationSequenceNumber != null)
+        'operation_sequence_number': operationSequenceNumber,
       if (createdAt != null) 'created_at': createdAt,
       if (updatedAt != null) 'updated_at': updatedAt,
       if (rowid != null) 'rowid': rowid,
@@ -3028,6 +3242,10 @@ class GroupsTableCompanion extends UpdateCompanion<GroupEntry> {
     Value<String>? creatorId,
     Value<String>? adminId,
     Value<int>? epoch,
+    Value<bool>? isReEpochPending,
+    Value<String?>? activeReEpochOperationId,
+    Value<int?>? preparedEpoch,
+    Value<int>? operationSequenceNumber,
     Value<DateTime>? createdAt,
     Value<DateTime>? updatedAt,
     Value<int>? rowid,
@@ -3038,6 +3256,12 @@ class GroupsTableCompanion extends UpdateCompanion<GroupEntry> {
       creatorId: creatorId ?? this.creatorId,
       adminId: adminId ?? this.adminId,
       epoch: epoch ?? this.epoch,
+      isReEpochPending: isReEpochPending ?? this.isReEpochPending,
+      activeReEpochOperationId:
+          activeReEpochOperationId ?? this.activeReEpochOperationId,
+      preparedEpoch: preparedEpoch ?? this.preparedEpoch,
+      operationSequenceNumber:
+          operationSequenceNumber ?? this.operationSequenceNumber,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       rowid: rowid ?? this.rowid,
@@ -3062,6 +3286,22 @@ class GroupsTableCompanion extends UpdateCompanion<GroupEntry> {
     if (epoch.present) {
       map['epoch'] = Variable<int>(epoch.value);
     }
+    if (isReEpochPending.present) {
+      map['is_re_epoch_pending'] = Variable<bool>(isReEpochPending.value);
+    }
+    if (activeReEpochOperationId.present) {
+      map['active_re_epoch_operation_id'] = Variable<String>(
+        activeReEpochOperationId.value,
+      );
+    }
+    if (preparedEpoch.present) {
+      map['prepared_epoch'] = Variable<int>(preparedEpoch.value);
+    }
+    if (operationSequenceNumber.present) {
+      map['operation_sequence_number'] = Variable<int>(
+        operationSequenceNumber.value,
+      );
+    }
     if (createdAt.present) {
       map['created_at'] = Variable<DateTime>(createdAt.value);
     }
@@ -3082,6 +3322,10 @@ class GroupsTableCompanion extends UpdateCompanion<GroupEntry> {
           ..write('creatorId: $creatorId, ')
           ..write('adminId: $adminId, ')
           ..write('epoch: $epoch, ')
+          ..write('isReEpochPending: $isReEpochPending, ')
+          ..write('activeReEpochOperationId: $activeReEpochOperationId, ')
+          ..write('preparedEpoch: $preparedEpoch, ')
+          ..write('operationSequenceNumber: $operationSequenceNumber, ')
           ..write('createdAt: $createdAt, ')
           ..write('updatedAt: $updatedAt, ')
           ..write('rowid: $rowid')
@@ -3513,6 +3757,2399 @@ class GroupMembersTableCompanion extends UpdateCompanion<GroupMemberEntry> {
   }
 }
 
+class $GroupEpochOperationsTableTable extends GroupEpochOperationsTable
+    with TableInfo<$GroupEpochOperationsTableTable, GroupEpochOperationEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $GroupEpochOperationsTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _operationIdMeta = const VerificationMeta(
+    'operationId',
+  );
+  @override
+  late final GeneratedColumn<String> operationId = GeneratedColumn<String>(
+    'operation_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _groupIdMeta = const VerificationMeta(
+    'groupId',
+  );
+  @override
+  late final GeneratedColumn<String> groupId = GeneratedColumn<String>(
+    'group_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    $customConstraints:
+        'NOT NULL REFERENCES groups_table(group_id) ON DELETE CASCADE',
+  );
+  static const VerificationMeta _previousEpochMeta = const VerificationMeta(
+    'previousEpoch',
+  );
+  @override
+  late final GeneratedColumn<int> previousEpoch = GeneratedColumn<int>(
+    'previous_epoch',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _targetEpochMeta = const VerificationMeta(
+    'targetEpoch',
+  );
+  @override
+  late final GeneratedColumn<int> targetEpoch = GeneratedColumn<int>(
+    'target_epoch',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _operationSequenceNumberMeta =
+      const VerificationMeta('operationSequenceNumber');
+  @override
+  late final GeneratedColumn<int> operationSequenceNumber =
+      GeneratedColumn<int>(
+        'operation_sequence_number',
+        aliasedName,
+        false,
+        type: DriftSqlType.int,
+        requiredDuringInsert: true,
+      );
+  static const VerificationMeta _operationStatusMeta = const VerificationMeta(
+    'operationStatus',
+  );
+  @override
+  late final GeneratedColumn<String> operationStatus = GeneratedColumn<String>(
+    'operation_status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    operationId,
+    groupId,
+    previousEpoch,
+    targetEpoch,
+    operationSequenceNumber,
+    operationStatus,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'group_epoch_operations_table';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<GroupEpochOperationEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('operation_id')) {
+      context.handle(
+        _operationIdMeta,
+        operationId.isAcceptableOrUnknown(
+          data['operation_id']!,
+          _operationIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_operationIdMeta);
+    }
+    if (data.containsKey('group_id')) {
+      context.handle(
+        _groupIdMeta,
+        groupId.isAcceptableOrUnknown(data['group_id']!, _groupIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_groupIdMeta);
+    }
+    if (data.containsKey('previous_epoch')) {
+      context.handle(
+        _previousEpochMeta,
+        previousEpoch.isAcceptableOrUnknown(
+          data['previous_epoch']!,
+          _previousEpochMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_previousEpochMeta);
+    }
+    if (data.containsKey('target_epoch')) {
+      context.handle(
+        _targetEpochMeta,
+        targetEpoch.isAcceptableOrUnknown(
+          data['target_epoch']!,
+          _targetEpochMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_targetEpochMeta);
+    }
+    if (data.containsKey('operation_sequence_number')) {
+      context.handle(
+        _operationSequenceNumberMeta,
+        operationSequenceNumber.isAcceptableOrUnknown(
+          data['operation_sequence_number']!,
+          _operationSequenceNumberMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_operationSequenceNumberMeta);
+    }
+    if (data.containsKey('operation_status')) {
+      context.handle(
+        _operationStatusMeta,
+        operationStatus.isAcceptableOrUnknown(
+          data['operation_status']!,
+          _operationStatusMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_operationStatusMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {operationId};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+    {operationId, groupId},
+  ];
+  @override
+  GroupEpochOperationEntry map(
+    Map<String, dynamic> data, {
+    String? tablePrefix,
+  }) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return GroupEpochOperationEntry(
+      operationId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}operation_id'],
+      )!,
+      groupId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}group_id'],
+      )!,
+      previousEpoch: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}previous_epoch'],
+      )!,
+      targetEpoch: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}target_epoch'],
+      )!,
+      operationSequenceNumber: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}operation_sequence_number'],
+      )!,
+      operationStatus: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}operation_status'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $GroupEpochOperationsTableTable createAlias(String alias) {
+    return $GroupEpochOperationsTableTable(attachedDatabase, alias);
+  }
+}
+
+class GroupEpochOperationEntry extends DataClass
+    implements Insertable<GroupEpochOperationEntry> {
+  /// Unique 128-bit operation identifier (e.g. RE-OP-<32 hex chars>).
+  final String operationId;
+
+  /// Foreign key referencing groups_table(group_id).
+  final String groupId;
+
+  /// Epoch before this operation began.
+  final int previousEpoch;
+
+  /// Epoch targeted by this operation (strictly > previousEpoch).
+  final int targetEpoch;
+
+  /// Strictly positive, monotonically increasing operation sequence number.
+  final int operationSequenceNumber;
+
+  /// Current lifecycle status: preparing, committing, finalizing, finalized, superseded.
+  final String operationStatus;
+
+  /// UTC creation timestamp.
+  final DateTime createdAt;
+
+  /// UTC last updated timestamp.
+  final DateTime updatedAt;
+  const GroupEpochOperationEntry({
+    required this.operationId,
+    required this.groupId,
+    required this.previousEpoch,
+    required this.targetEpoch,
+    required this.operationSequenceNumber,
+    required this.operationStatus,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['operation_id'] = Variable<String>(operationId);
+    map['group_id'] = Variable<String>(groupId);
+    map['previous_epoch'] = Variable<int>(previousEpoch);
+    map['target_epoch'] = Variable<int>(targetEpoch);
+    map['operation_sequence_number'] = Variable<int>(operationSequenceNumber);
+    map['operation_status'] = Variable<String>(operationStatus);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  GroupEpochOperationsTableCompanion toCompanion(bool nullToAbsent) {
+    return GroupEpochOperationsTableCompanion(
+      operationId: Value(operationId),
+      groupId: Value(groupId),
+      previousEpoch: Value(previousEpoch),
+      targetEpoch: Value(targetEpoch),
+      operationSequenceNumber: Value(operationSequenceNumber),
+      operationStatus: Value(operationStatus),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory GroupEpochOperationEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return GroupEpochOperationEntry(
+      operationId: serializer.fromJson<String>(json['operationId']),
+      groupId: serializer.fromJson<String>(json['groupId']),
+      previousEpoch: serializer.fromJson<int>(json['previousEpoch']),
+      targetEpoch: serializer.fromJson<int>(json['targetEpoch']),
+      operationSequenceNumber: serializer.fromJson<int>(
+        json['operationSequenceNumber'],
+      ),
+      operationStatus: serializer.fromJson<String>(json['operationStatus']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'operationId': serializer.toJson<String>(operationId),
+      'groupId': serializer.toJson<String>(groupId),
+      'previousEpoch': serializer.toJson<int>(previousEpoch),
+      'targetEpoch': serializer.toJson<int>(targetEpoch),
+      'operationSequenceNumber': serializer.toJson<int>(
+        operationSequenceNumber,
+      ),
+      'operationStatus': serializer.toJson<String>(operationStatus),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  GroupEpochOperationEntry copyWith({
+    String? operationId,
+    String? groupId,
+    int? previousEpoch,
+    int? targetEpoch,
+    int? operationSequenceNumber,
+    String? operationStatus,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) => GroupEpochOperationEntry(
+    operationId: operationId ?? this.operationId,
+    groupId: groupId ?? this.groupId,
+    previousEpoch: previousEpoch ?? this.previousEpoch,
+    targetEpoch: targetEpoch ?? this.targetEpoch,
+    operationSequenceNumber:
+        operationSequenceNumber ?? this.operationSequenceNumber,
+    operationStatus: operationStatus ?? this.operationStatus,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  GroupEpochOperationEntry copyWithCompanion(
+    GroupEpochOperationsTableCompanion data,
+  ) {
+    return GroupEpochOperationEntry(
+      operationId: data.operationId.present
+          ? data.operationId.value
+          : this.operationId,
+      groupId: data.groupId.present ? data.groupId.value : this.groupId,
+      previousEpoch: data.previousEpoch.present
+          ? data.previousEpoch.value
+          : this.previousEpoch,
+      targetEpoch: data.targetEpoch.present
+          ? data.targetEpoch.value
+          : this.targetEpoch,
+      operationSequenceNumber: data.operationSequenceNumber.present
+          ? data.operationSequenceNumber.value
+          : this.operationSequenceNumber,
+      operationStatus: data.operationStatus.present
+          ? data.operationStatus.value
+          : this.operationStatus,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('GroupEpochOperationEntry(')
+          ..write('operationId: $operationId, ')
+          ..write('groupId: $groupId, ')
+          ..write('previousEpoch: $previousEpoch, ')
+          ..write('targetEpoch: $targetEpoch, ')
+          ..write('operationSequenceNumber: $operationSequenceNumber, ')
+          ..write('operationStatus: $operationStatus, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    operationId,
+    groupId,
+    previousEpoch,
+    targetEpoch,
+    operationSequenceNumber,
+    operationStatus,
+    createdAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is GroupEpochOperationEntry &&
+          other.operationId == this.operationId &&
+          other.groupId == this.groupId &&
+          other.previousEpoch == this.previousEpoch &&
+          other.targetEpoch == this.targetEpoch &&
+          other.operationSequenceNumber == this.operationSequenceNumber &&
+          other.operationStatus == this.operationStatus &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class GroupEpochOperationsTableCompanion
+    extends UpdateCompanion<GroupEpochOperationEntry> {
+  final Value<String> operationId;
+  final Value<String> groupId;
+  final Value<int> previousEpoch;
+  final Value<int> targetEpoch;
+  final Value<int> operationSequenceNumber;
+  final Value<String> operationStatus;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const GroupEpochOperationsTableCompanion({
+    this.operationId = const Value.absent(),
+    this.groupId = const Value.absent(),
+    this.previousEpoch = const Value.absent(),
+    this.targetEpoch = const Value.absent(),
+    this.operationSequenceNumber = const Value.absent(),
+    this.operationStatus = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  GroupEpochOperationsTableCompanion.insert({
+    required String operationId,
+    required String groupId,
+    required int previousEpoch,
+    required int targetEpoch,
+    required int operationSequenceNumber,
+    required String operationStatus,
+    required DateTime createdAt,
+    required DateTime updatedAt,
+    this.rowid = const Value.absent(),
+  }) : operationId = Value(operationId),
+       groupId = Value(groupId),
+       previousEpoch = Value(previousEpoch),
+       targetEpoch = Value(targetEpoch),
+       operationSequenceNumber = Value(operationSequenceNumber),
+       operationStatus = Value(operationStatus),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<GroupEpochOperationEntry> custom({
+    Expression<String>? operationId,
+    Expression<String>? groupId,
+    Expression<int>? previousEpoch,
+    Expression<int>? targetEpoch,
+    Expression<int>? operationSequenceNumber,
+    Expression<String>? operationStatus,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (operationId != null) 'operation_id': operationId,
+      if (groupId != null) 'group_id': groupId,
+      if (previousEpoch != null) 'previous_epoch': previousEpoch,
+      if (targetEpoch != null) 'target_epoch': targetEpoch,
+      if (operationSequenceNumber != null)
+        'operation_sequence_number': operationSequenceNumber,
+      if (operationStatus != null) 'operation_status': operationStatus,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  GroupEpochOperationsTableCompanion copyWith({
+    Value<String>? operationId,
+    Value<String>? groupId,
+    Value<int>? previousEpoch,
+    Value<int>? targetEpoch,
+    Value<int>? operationSequenceNumber,
+    Value<String>? operationStatus,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return GroupEpochOperationsTableCompanion(
+      operationId: operationId ?? this.operationId,
+      groupId: groupId ?? this.groupId,
+      previousEpoch: previousEpoch ?? this.previousEpoch,
+      targetEpoch: targetEpoch ?? this.targetEpoch,
+      operationSequenceNumber:
+          operationSequenceNumber ?? this.operationSequenceNumber,
+      operationStatus: operationStatus ?? this.operationStatus,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (operationId.present) {
+      map['operation_id'] = Variable<String>(operationId.value);
+    }
+    if (groupId.present) {
+      map['group_id'] = Variable<String>(groupId.value);
+    }
+    if (previousEpoch.present) {
+      map['previous_epoch'] = Variable<int>(previousEpoch.value);
+    }
+    if (targetEpoch.present) {
+      map['target_epoch'] = Variable<int>(targetEpoch.value);
+    }
+    if (operationSequenceNumber.present) {
+      map['operation_sequence_number'] = Variable<int>(
+        operationSequenceNumber.value,
+      );
+    }
+    if (operationStatus.present) {
+      map['operation_status'] = Variable<String>(operationStatus.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('GroupEpochOperationsTableCompanion(')
+          ..write('operationId: $operationId, ')
+          ..write('groupId: $groupId, ')
+          ..write('previousEpoch: $previousEpoch, ')
+          ..write('targetEpoch: $targetEpoch, ')
+          ..write('operationSequenceNumber: $operationSequenceNumber, ')
+          ..write('operationStatus: $operationStatus, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $GroupEpochSyncTableTable extends GroupEpochSyncTable
+    with TableInfo<$GroupEpochSyncTableTable, GroupEpochSyncEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $GroupEpochSyncTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _operationIdMeta = const VerificationMeta(
+    'operationId',
+  );
+  @override
+  late final GeneratedColumn<String> operationId = GeneratedColumn<String>(
+    'operation_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _groupIdMeta = const VerificationMeta(
+    'groupId',
+  );
+  @override
+  late final GeneratedColumn<String> groupId = GeneratedColumn<String>(
+    'group_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _memberPeerIdMeta = const VerificationMeta(
+    'memberPeerId',
+  );
+  @override
+  late final GeneratedColumn<String> memberPeerId = GeneratedColumn<String>(
+    'member_peer_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _prepareStatusMeta = const VerificationMeta(
+    'prepareStatus',
+  );
+  @override
+  late final GeneratedColumn<String> prepareStatus = GeneratedColumn<String>(
+    'prepare_status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('pending'),
+  );
+  static const VerificationMeta _commitStatusMeta = const VerificationMeta(
+    'commitStatus',
+  );
+  @override
+  late final GeneratedColumn<String> commitStatus = GeneratedColumn<String>(
+    'commit_status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('pending'),
+  );
+  static const VerificationMeta _finalizeStatusMeta = const VerificationMeta(
+    'finalizeStatus',
+  );
+  @override
+  late final GeneratedColumn<String> finalizeStatus = GeneratedColumn<String>(
+    'finalize_status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('pending'),
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    operationId,
+    groupId,
+    memberPeerId,
+    prepareStatus,
+    commitStatus,
+    finalizeStatus,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'group_epoch_sync_table';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<GroupEpochSyncEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('operation_id')) {
+      context.handle(
+        _operationIdMeta,
+        operationId.isAcceptableOrUnknown(
+          data['operation_id']!,
+          _operationIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_operationIdMeta);
+    }
+    if (data.containsKey('group_id')) {
+      context.handle(
+        _groupIdMeta,
+        groupId.isAcceptableOrUnknown(data['group_id']!, _groupIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_groupIdMeta);
+    }
+    if (data.containsKey('member_peer_id')) {
+      context.handle(
+        _memberPeerIdMeta,
+        memberPeerId.isAcceptableOrUnknown(
+          data['member_peer_id']!,
+          _memberPeerIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_memberPeerIdMeta);
+    }
+    if (data.containsKey('prepare_status')) {
+      context.handle(
+        _prepareStatusMeta,
+        prepareStatus.isAcceptableOrUnknown(
+          data['prepare_status']!,
+          _prepareStatusMeta,
+        ),
+      );
+    }
+    if (data.containsKey('commit_status')) {
+      context.handle(
+        _commitStatusMeta,
+        commitStatus.isAcceptableOrUnknown(
+          data['commit_status']!,
+          _commitStatusMeta,
+        ),
+      );
+    }
+    if (data.containsKey('finalize_status')) {
+      context.handle(
+        _finalizeStatusMeta,
+        finalizeStatus.isAcceptableOrUnknown(
+          data['finalize_status']!,
+          _finalizeStatusMeta,
+        ),
+      );
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {operationId, memberPeerId};
+  @override
+  GroupEpochSyncEntry map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return GroupEpochSyncEntry(
+      operationId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}operation_id'],
+      )!,
+      groupId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}group_id'],
+      )!,
+      memberPeerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}member_peer_id'],
+      )!,
+      prepareStatus: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}prepare_status'],
+      )!,
+      commitStatus: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}commit_status'],
+      )!,
+      finalizeStatus: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}finalize_status'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $GroupEpochSyncTableTable createAlias(String alias) {
+    return $GroupEpochSyncTableTable(attachedDatabase, alias);
+  }
+}
+
+class GroupEpochSyncEntry extends DataClass
+    implements Insertable<GroupEpochSyncEntry> {
+  /// Operation identifier referencing group_epoch_operations_table.
+  final String operationId;
+
+  /// Group identifier referencing matching operation group.
+  final String groupId;
+
+  /// Peer device identifier of the group member.
+  final String memberPeerId;
+
+  /// Phase 1 prepare status: pending, acknowledged, failed.
+  final String prepareStatus;
+
+  /// Phase 2 commit status: pending, acknowledged, failed.
+  final String commitStatus;
+
+  /// Phase 3 finalize status: pending, acknowledged, failed.
+  final String finalizeStatus;
+
+  /// UTC last updated timestamp.
+  final DateTime updatedAt;
+  const GroupEpochSyncEntry({
+    required this.operationId,
+    required this.groupId,
+    required this.memberPeerId,
+    required this.prepareStatus,
+    required this.commitStatus,
+    required this.finalizeStatus,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['operation_id'] = Variable<String>(operationId);
+    map['group_id'] = Variable<String>(groupId);
+    map['member_peer_id'] = Variable<String>(memberPeerId);
+    map['prepare_status'] = Variable<String>(prepareStatus);
+    map['commit_status'] = Variable<String>(commitStatus);
+    map['finalize_status'] = Variable<String>(finalizeStatus);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  GroupEpochSyncTableCompanion toCompanion(bool nullToAbsent) {
+    return GroupEpochSyncTableCompanion(
+      operationId: Value(operationId),
+      groupId: Value(groupId),
+      memberPeerId: Value(memberPeerId),
+      prepareStatus: Value(prepareStatus),
+      commitStatus: Value(commitStatus),
+      finalizeStatus: Value(finalizeStatus),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory GroupEpochSyncEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return GroupEpochSyncEntry(
+      operationId: serializer.fromJson<String>(json['operationId']),
+      groupId: serializer.fromJson<String>(json['groupId']),
+      memberPeerId: serializer.fromJson<String>(json['memberPeerId']),
+      prepareStatus: serializer.fromJson<String>(json['prepareStatus']),
+      commitStatus: serializer.fromJson<String>(json['commitStatus']),
+      finalizeStatus: serializer.fromJson<String>(json['finalizeStatus']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'operationId': serializer.toJson<String>(operationId),
+      'groupId': serializer.toJson<String>(groupId),
+      'memberPeerId': serializer.toJson<String>(memberPeerId),
+      'prepareStatus': serializer.toJson<String>(prepareStatus),
+      'commitStatus': serializer.toJson<String>(commitStatus),
+      'finalizeStatus': serializer.toJson<String>(finalizeStatus),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  GroupEpochSyncEntry copyWith({
+    String? operationId,
+    String? groupId,
+    String? memberPeerId,
+    String? prepareStatus,
+    String? commitStatus,
+    String? finalizeStatus,
+    DateTime? updatedAt,
+  }) => GroupEpochSyncEntry(
+    operationId: operationId ?? this.operationId,
+    groupId: groupId ?? this.groupId,
+    memberPeerId: memberPeerId ?? this.memberPeerId,
+    prepareStatus: prepareStatus ?? this.prepareStatus,
+    commitStatus: commitStatus ?? this.commitStatus,
+    finalizeStatus: finalizeStatus ?? this.finalizeStatus,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  GroupEpochSyncEntry copyWithCompanion(GroupEpochSyncTableCompanion data) {
+    return GroupEpochSyncEntry(
+      operationId: data.operationId.present
+          ? data.operationId.value
+          : this.operationId,
+      groupId: data.groupId.present ? data.groupId.value : this.groupId,
+      memberPeerId: data.memberPeerId.present
+          ? data.memberPeerId.value
+          : this.memberPeerId,
+      prepareStatus: data.prepareStatus.present
+          ? data.prepareStatus.value
+          : this.prepareStatus,
+      commitStatus: data.commitStatus.present
+          ? data.commitStatus.value
+          : this.commitStatus,
+      finalizeStatus: data.finalizeStatus.present
+          ? data.finalizeStatus.value
+          : this.finalizeStatus,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('GroupEpochSyncEntry(')
+          ..write('operationId: $operationId, ')
+          ..write('groupId: $groupId, ')
+          ..write('memberPeerId: $memberPeerId, ')
+          ..write('prepareStatus: $prepareStatus, ')
+          ..write('commitStatus: $commitStatus, ')
+          ..write('finalizeStatus: $finalizeStatus, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    operationId,
+    groupId,
+    memberPeerId,
+    prepareStatus,
+    commitStatus,
+    finalizeStatus,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is GroupEpochSyncEntry &&
+          other.operationId == this.operationId &&
+          other.groupId == this.groupId &&
+          other.memberPeerId == this.memberPeerId &&
+          other.prepareStatus == this.prepareStatus &&
+          other.commitStatus == this.commitStatus &&
+          other.finalizeStatus == this.finalizeStatus &&
+          other.updatedAt == this.updatedAt);
+}
+
+class GroupEpochSyncTableCompanion
+    extends UpdateCompanion<GroupEpochSyncEntry> {
+  final Value<String> operationId;
+  final Value<String> groupId;
+  final Value<String> memberPeerId;
+  final Value<String> prepareStatus;
+  final Value<String> commitStatus;
+  final Value<String> finalizeStatus;
+  final Value<DateTime> updatedAt;
+  final Value<int> rowid;
+  const GroupEpochSyncTableCompanion({
+    this.operationId = const Value.absent(),
+    this.groupId = const Value.absent(),
+    this.memberPeerId = const Value.absent(),
+    this.prepareStatus = const Value.absent(),
+    this.commitStatus = const Value.absent(),
+    this.finalizeStatus = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  GroupEpochSyncTableCompanion.insert({
+    required String operationId,
+    required String groupId,
+    required String memberPeerId,
+    this.prepareStatus = const Value.absent(),
+    this.commitStatus = const Value.absent(),
+    this.finalizeStatus = const Value.absent(),
+    required DateTime updatedAt,
+    this.rowid = const Value.absent(),
+  }) : operationId = Value(operationId),
+       groupId = Value(groupId),
+       memberPeerId = Value(memberPeerId),
+       updatedAt = Value(updatedAt);
+  static Insertable<GroupEpochSyncEntry> custom({
+    Expression<String>? operationId,
+    Expression<String>? groupId,
+    Expression<String>? memberPeerId,
+    Expression<String>? prepareStatus,
+    Expression<String>? commitStatus,
+    Expression<String>? finalizeStatus,
+    Expression<DateTime>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (operationId != null) 'operation_id': operationId,
+      if (groupId != null) 'group_id': groupId,
+      if (memberPeerId != null) 'member_peer_id': memberPeerId,
+      if (prepareStatus != null) 'prepare_status': prepareStatus,
+      if (commitStatus != null) 'commit_status': commitStatus,
+      if (finalizeStatus != null) 'finalize_status': finalizeStatus,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  GroupEpochSyncTableCompanion copyWith({
+    Value<String>? operationId,
+    Value<String>? groupId,
+    Value<String>? memberPeerId,
+    Value<String>? prepareStatus,
+    Value<String>? commitStatus,
+    Value<String>? finalizeStatus,
+    Value<DateTime>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return GroupEpochSyncTableCompanion(
+      operationId: operationId ?? this.operationId,
+      groupId: groupId ?? this.groupId,
+      memberPeerId: memberPeerId ?? this.memberPeerId,
+      prepareStatus: prepareStatus ?? this.prepareStatus,
+      commitStatus: commitStatus ?? this.commitStatus,
+      finalizeStatus: finalizeStatus ?? this.finalizeStatus,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (operationId.present) {
+      map['operation_id'] = Variable<String>(operationId.value);
+    }
+    if (groupId.present) {
+      map['group_id'] = Variable<String>(groupId.value);
+    }
+    if (memberPeerId.present) {
+      map['member_peer_id'] = Variable<String>(memberPeerId.value);
+    }
+    if (prepareStatus.present) {
+      map['prepare_status'] = Variable<String>(prepareStatus.value);
+    }
+    if (commitStatus.present) {
+      map['commit_status'] = Variable<String>(commitStatus.value);
+    }
+    if (finalizeStatus.present) {
+      map['finalize_status'] = Variable<String>(finalizeStatus.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('GroupEpochSyncTableCompanion(')
+          ..write('operationId: $operationId, ')
+          ..write('groupId: $groupId, ')
+          ..write('memberPeerId: $memberPeerId, ')
+          ..write('prepareStatus: $prepareStatus, ')
+          ..write('commitStatus: $commitStatus, ')
+          ..write('finalizeStatus: $finalizeStatus, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $GroupMessagePayloadsTableTable extends GroupMessagePayloadsTable
+    with TableInfo<$GroupMessagePayloadsTableTable, GroupMessagePayloadEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $GroupMessagePayloadsTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _groupIdMeta = const VerificationMeta(
+    'groupId',
+  );
+  @override
+  late final GeneratedColumn<String> groupId = GeneratedColumn<String>(
+    'group_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    $customConstraints:
+        'NOT NULL REFERENCES groups_table(group_id) ON DELETE CASCADE',
+  );
+  static const VerificationMeta _messageIdMeta = const VerificationMeta(
+    'messageId',
+  );
+  @override
+  late final GeneratedColumn<String> messageId = GeneratedColumn<String>(
+    'message_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _encryptedPayloadMeta = const VerificationMeta(
+    'encryptedPayload',
+  );
+  @override
+  late final GeneratedColumn<Uint8List> encryptedPayload =
+      GeneratedColumn<Uint8List>(
+        'encrypted_payload',
+        aliasedName,
+        false,
+        type: DriftSqlType.blob,
+        requiredDuringInsert: true,
+      );
+  static const VerificationMeta _nonceMeta = const VerificationMeta('nonce');
+  @override
+  late final GeneratedColumn<Uint8List> nonce = GeneratedColumn<Uint8List>(
+    'nonce',
+    aliasedName,
+    false,
+    type: DriftSqlType.blob,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _expiresAtMeta = const VerificationMeta(
+    'expiresAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> expiresAt = GeneratedColumn<DateTime>(
+    'expires_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    groupId,
+    messageId,
+    encryptedPayload,
+    nonce,
+    createdAt,
+    expiresAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'group_message_payloads_table';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<GroupMessagePayloadEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('group_id')) {
+      context.handle(
+        _groupIdMeta,
+        groupId.isAcceptableOrUnknown(data['group_id']!, _groupIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_groupIdMeta);
+    }
+    if (data.containsKey('message_id')) {
+      context.handle(
+        _messageIdMeta,
+        messageId.isAcceptableOrUnknown(data['message_id']!, _messageIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_messageIdMeta);
+    }
+    if (data.containsKey('encrypted_payload')) {
+      context.handle(
+        _encryptedPayloadMeta,
+        encryptedPayload.isAcceptableOrUnknown(
+          data['encrypted_payload']!,
+          _encryptedPayloadMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_encryptedPayloadMeta);
+    }
+    if (data.containsKey('nonce')) {
+      context.handle(
+        _nonceMeta,
+        nonce.isAcceptableOrUnknown(data['nonce']!, _nonceMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_nonceMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('expires_at')) {
+      context.handle(
+        _expiresAtMeta,
+        expiresAt.isAcceptableOrUnknown(data['expires_at']!, _expiresAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {groupId, messageId};
+  @override
+  GroupMessagePayloadEntry map(
+    Map<String, dynamic> data, {
+    String? tablePrefix,
+  }) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return GroupMessagePayloadEntry(
+      groupId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}group_id'],
+      )!,
+      messageId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}message_id'],
+      )!,
+      encryptedPayload: attachedDatabase.typeMapping.read(
+        DriftSqlType.blob,
+        data['${effectivePrefix}encrypted_payload'],
+      )!,
+      nonce: attachedDatabase.typeMapping.read(
+        DriftSqlType.blob,
+        data['${effectivePrefix}nonce'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      expiresAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}expires_at'],
+      ),
+    );
+  }
+
+  @override
+  $GroupMessagePayloadsTableTable createAlias(String alias) {
+    return $GroupMessagePayloadsTableTable(attachedDatabase, alias);
+  }
+}
+
+class GroupMessagePayloadEntry extends DataClass
+    implements Insertable<GroupMessagePayloadEntry> {
+  /// Target group identifier, referencing GroupsTable.
+  final String groupId;
+
+  /// Unique message identifier.
+  final String messageId;
+
+  /// Binary encrypted-at-rest payload (never plaintext).
+  final Uint8List encryptedPayload;
+
+  /// Binary initialization vector / nonce used for local AEAD encryption.
+  final Uint8List nonce;
+
+  /// UTC creation timestamp.
+  final DateTime createdAt;
+
+  /// Optional UTC expiration timestamp for retention pruning.
+  final DateTime? expiresAt;
+  const GroupMessagePayloadEntry({
+    required this.groupId,
+    required this.messageId,
+    required this.encryptedPayload,
+    required this.nonce,
+    required this.createdAt,
+    this.expiresAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['group_id'] = Variable<String>(groupId);
+    map['message_id'] = Variable<String>(messageId);
+    map['encrypted_payload'] = Variable<Uint8List>(encryptedPayload);
+    map['nonce'] = Variable<Uint8List>(nonce);
+    map['created_at'] = Variable<DateTime>(createdAt);
+    if (!nullToAbsent || expiresAt != null) {
+      map['expires_at'] = Variable<DateTime>(expiresAt);
+    }
+    return map;
+  }
+
+  GroupMessagePayloadsTableCompanion toCompanion(bool nullToAbsent) {
+    return GroupMessagePayloadsTableCompanion(
+      groupId: Value(groupId),
+      messageId: Value(messageId),
+      encryptedPayload: Value(encryptedPayload),
+      nonce: Value(nonce),
+      createdAt: Value(createdAt),
+      expiresAt: expiresAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(expiresAt),
+    );
+  }
+
+  factory GroupMessagePayloadEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return GroupMessagePayloadEntry(
+      groupId: serializer.fromJson<String>(json['groupId']),
+      messageId: serializer.fromJson<String>(json['messageId']),
+      encryptedPayload: serializer.fromJson<Uint8List>(
+        json['encryptedPayload'],
+      ),
+      nonce: serializer.fromJson<Uint8List>(json['nonce']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      expiresAt: serializer.fromJson<DateTime?>(json['expiresAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'groupId': serializer.toJson<String>(groupId),
+      'messageId': serializer.toJson<String>(messageId),
+      'encryptedPayload': serializer.toJson<Uint8List>(encryptedPayload),
+      'nonce': serializer.toJson<Uint8List>(nonce),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'expiresAt': serializer.toJson<DateTime?>(expiresAt),
+    };
+  }
+
+  GroupMessagePayloadEntry copyWith({
+    String? groupId,
+    String? messageId,
+    Uint8List? encryptedPayload,
+    Uint8List? nonce,
+    DateTime? createdAt,
+    Value<DateTime?> expiresAt = const Value.absent(),
+  }) => GroupMessagePayloadEntry(
+    groupId: groupId ?? this.groupId,
+    messageId: messageId ?? this.messageId,
+    encryptedPayload: encryptedPayload ?? this.encryptedPayload,
+    nonce: nonce ?? this.nonce,
+    createdAt: createdAt ?? this.createdAt,
+    expiresAt: expiresAt.present ? expiresAt.value : this.expiresAt,
+  );
+  GroupMessagePayloadEntry copyWithCompanion(
+    GroupMessagePayloadsTableCompanion data,
+  ) {
+    return GroupMessagePayloadEntry(
+      groupId: data.groupId.present ? data.groupId.value : this.groupId,
+      messageId: data.messageId.present ? data.messageId.value : this.messageId,
+      encryptedPayload: data.encryptedPayload.present
+          ? data.encryptedPayload.value
+          : this.encryptedPayload,
+      nonce: data.nonce.present ? data.nonce.value : this.nonce,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      expiresAt: data.expiresAt.present ? data.expiresAt.value : this.expiresAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('GroupMessagePayloadEntry(')
+          ..write('groupId: $groupId, ')
+          ..write('messageId: $messageId, ')
+          ..write('encryptedPayload: $encryptedPayload, ')
+          ..write('nonce: $nonce, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('expiresAt: $expiresAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    groupId,
+    messageId,
+    $driftBlobEquality.hash(encryptedPayload),
+    $driftBlobEquality.hash(nonce),
+    createdAt,
+    expiresAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is GroupMessagePayloadEntry &&
+          other.groupId == this.groupId &&
+          other.messageId == this.messageId &&
+          $driftBlobEquality.equals(
+            other.encryptedPayload,
+            this.encryptedPayload,
+          ) &&
+          $driftBlobEquality.equals(other.nonce, this.nonce) &&
+          other.createdAt == this.createdAt &&
+          other.expiresAt == this.expiresAt);
+}
+
+class GroupMessagePayloadsTableCompanion
+    extends UpdateCompanion<GroupMessagePayloadEntry> {
+  final Value<String> groupId;
+  final Value<String> messageId;
+  final Value<Uint8List> encryptedPayload;
+  final Value<Uint8List> nonce;
+  final Value<DateTime> createdAt;
+  final Value<DateTime?> expiresAt;
+  final Value<int> rowid;
+  const GroupMessagePayloadsTableCompanion({
+    this.groupId = const Value.absent(),
+    this.messageId = const Value.absent(),
+    this.encryptedPayload = const Value.absent(),
+    this.nonce = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.expiresAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  GroupMessagePayloadsTableCompanion.insert({
+    required String groupId,
+    required String messageId,
+    required Uint8List encryptedPayload,
+    required Uint8List nonce,
+    required DateTime createdAt,
+    this.expiresAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : groupId = Value(groupId),
+       messageId = Value(messageId),
+       encryptedPayload = Value(encryptedPayload),
+       nonce = Value(nonce),
+       createdAt = Value(createdAt);
+  static Insertable<GroupMessagePayloadEntry> custom({
+    Expression<String>? groupId,
+    Expression<String>? messageId,
+    Expression<Uint8List>? encryptedPayload,
+    Expression<Uint8List>? nonce,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? expiresAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (groupId != null) 'group_id': groupId,
+      if (messageId != null) 'message_id': messageId,
+      if (encryptedPayload != null) 'encrypted_payload': encryptedPayload,
+      if (nonce != null) 'nonce': nonce,
+      if (createdAt != null) 'created_at': createdAt,
+      if (expiresAt != null) 'expires_at': expiresAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  GroupMessagePayloadsTableCompanion copyWith({
+    Value<String>? groupId,
+    Value<String>? messageId,
+    Value<Uint8List>? encryptedPayload,
+    Value<Uint8List>? nonce,
+    Value<DateTime>? createdAt,
+    Value<DateTime?>? expiresAt,
+    Value<int>? rowid,
+  }) {
+    return GroupMessagePayloadsTableCompanion(
+      groupId: groupId ?? this.groupId,
+      messageId: messageId ?? this.messageId,
+      encryptedPayload: encryptedPayload ?? this.encryptedPayload,
+      nonce: nonce ?? this.nonce,
+      createdAt: createdAt ?? this.createdAt,
+      expiresAt: expiresAt ?? this.expiresAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (groupId.present) {
+      map['group_id'] = Variable<String>(groupId.value);
+    }
+    if (messageId.present) {
+      map['message_id'] = Variable<String>(messageId.value);
+    }
+    if (encryptedPayload.present) {
+      map['encrypted_payload'] = Variable<Uint8List>(encryptedPayload.value);
+    }
+    if (nonce.present) {
+      map['nonce'] = Variable<Uint8List>(nonce.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (expiresAt.present) {
+      map['expires_at'] = Variable<DateTime>(expiresAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('GroupMessagePayloadsTableCompanion(')
+          ..write('groupId: $groupId, ')
+          ..write('messageId: $messageId, ')
+          ..write('encryptedPayload: $encryptedPayload, ')
+          ..write('nonce: $nonce, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('expiresAt: $expiresAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $GroupDeliveryQueueTableTable extends GroupDeliveryQueueTable
+    with TableInfo<$GroupDeliveryQueueTableTable, GroupDeliveryQueueEntry> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $GroupDeliveryQueueTableTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _queueIdMeta = const VerificationMeta(
+    'queueId',
+  );
+  @override
+  late final GeneratedColumn<int> queueId = GeneratedColumn<int>(
+    'queue_id',
+    aliasedName,
+    false,
+    hasAutoIncrement: true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'PRIMARY KEY AUTOINCREMENT',
+    ),
+  );
+  static const VerificationMeta _groupIdMeta = const VerificationMeta(
+    'groupId',
+  );
+  @override
+  late final GeneratedColumn<String> groupId = GeneratedColumn<String>(
+    'group_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _messageIdMeta = const VerificationMeta(
+    'messageId',
+  );
+  @override
+  late final GeneratedColumn<String> messageId = GeneratedColumn<String>(
+    'message_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _recipientPeerIdMeta = const VerificationMeta(
+    'recipientPeerId',
+  );
+  @override
+  late final GeneratedColumn<String> recipientPeerId = GeneratedColumn<String>(
+    'recipient_peer_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _epochMeta = const VerificationMeta('epoch');
+  @override
+  late final GeneratedColumn<int> epoch = GeneratedColumn<int>(
+    'epoch',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _packetTypeMeta = const VerificationMeta(
+    'packetType',
+  );
+  @override
+  late final GeneratedColumn<String> packetType = GeneratedColumn<String>(
+    'packet_type',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _sessionIdMeta = const VerificationMeta(
+    'sessionId',
+  );
+  @override
+  late final GeneratedColumn<String> sessionId = GeneratedColumn<String>(
+    'session_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _encryptedEnvelopeJsonMeta =
+      const VerificationMeta('encryptedEnvelopeJson');
+  @override
+  late final GeneratedColumn<String> encryptedEnvelopeJson =
+      GeneratedColumn<String>(
+        'encrypted_envelope_json',
+        aliasedName,
+        false,
+        type: DriftSqlType.string,
+        requiredDuringInsert: true,
+      );
+  static const VerificationMeta _statusMeta = const VerificationMeta('status');
+  @override
+  late final GeneratedColumn<String> status = GeneratedColumn<String>(
+    'status',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('pending'),
+  );
+  static const VerificationMeta _failureReasonMeta = const VerificationMeta(
+    'failureReason',
+  );
+  @override
+  late final GeneratedColumn<String> failureReason = GeneratedColumn<String>(
+    'failure_reason',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _retryCountMeta = const VerificationMeta(
+    'retryCount',
+  );
+  @override
+  late final GeneratedColumn<int> retryCount = GeneratedColumn<int>(
+    'retry_count',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _nextRetryAtMeta = const VerificationMeta(
+    'nextRetryAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> nextRetryAt = GeneratedColumn<DateTime>(
+    'next_retry_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> createdAt = GeneratedColumn<DateTime>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<DateTime> updatedAt = GeneratedColumn<DateTime>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.dateTime,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    queueId,
+    groupId,
+    messageId,
+    recipientPeerId,
+    epoch,
+    packetType,
+    sessionId,
+    encryptedEnvelopeJson,
+    status,
+    failureReason,
+    retryCount,
+    nextRetryAt,
+    createdAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'group_delivery_queue_table';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<GroupDeliveryQueueEntry> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('queue_id')) {
+      context.handle(
+        _queueIdMeta,
+        queueId.isAcceptableOrUnknown(data['queue_id']!, _queueIdMeta),
+      );
+    }
+    if (data.containsKey('group_id')) {
+      context.handle(
+        _groupIdMeta,
+        groupId.isAcceptableOrUnknown(data['group_id']!, _groupIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_groupIdMeta);
+    }
+    if (data.containsKey('message_id')) {
+      context.handle(
+        _messageIdMeta,
+        messageId.isAcceptableOrUnknown(data['message_id']!, _messageIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_messageIdMeta);
+    }
+    if (data.containsKey('recipient_peer_id')) {
+      context.handle(
+        _recipientPeerIdMeta,
+        recipientPeerId.isAcceptableOrUnknown(
+          data['recipient_peer_id']!,
+          _recipientPeerIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_recipientPeerIdMeta);
+    }
+    if (data.containsKey('epoch')) {
+      context.handle(
+        _epochMeta,
+        epoch.isAcceptableOrUnknown(data['epoch']!, _epochMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_epochMeta);
+    }
+    if (data.containsKey('packet_type')) {
+      context.handle(
+        _packetTypeMeta,
+        packetType.isAcceptableOrUnknown(data['packet_type']!, _packetTypeMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_packetTypeMeta);
+    }
+    if (data.containsKey('session_id')) {
+      context.handle(
+        _sessionIdMeta,
+        sessionId.isAcceptableOrUnknown(data['session_id']!, _sessionIdMeta),
+      );
+    }
+    if (data.containsKey('encrypted_envelope_json')) {
+      context.handle(
+        _encryptedEnvelopeJsonMeta,
+        encryptedEnvelopeJson.isAcceptableOrUnknown(
+          data['encrypted_envelope_json']!,
+          _encryptedEnvelopeJsonMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_encryptedEnvelopeJsonMeta);
+    }
+    if (data.containsKey('status')) {
+      context.handle(
+        _statusMeta,
+        status.isAcceptableOrUnknown(data['status']!, _statusMeta),
+      );
+    }
+    if (data.containsKey('failure_reason')) {
+      context.handle(
+        _failureReasonMeta,
+        failureReason.isAcceptableOrUnknown(
+          data['failure_reason']!,
+          _failureReasonMeta,
+        ),
+      );
+    }
+    if (data.containsKey('retry_count')) {
+      context.handle(
+        _retryCountMeta,
+        retryCount.isAcceptableOrUnknown(data['retry_count']!, _retryCountMeta),
+      );
+    }
+    if (data.containsKey('next_retry_at')) {
+      context.handle(
+        _nextRetryAtMeta,
+        nextRetryAt.isAcceptableOrUnknown(
+          data['next_retry_at']!,
+          _nextRetryAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {queueId};
+  @override
+  List<Set<GeneratedColumn>> get uniqueKeys => [
+    {groupId, recipientPeerId, messageId},
+  ];
+  @override
+  GroupDeliveryQueueEntry map(
+    Map<String, dynamic> data, {
+    String? tablePrefix,
+  }) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return GroupDeliveryQueueEntry(
+      queueId: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}queue_id'],
+      )!,
+      groupId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}group_id'],
+      )!,
+      messageId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}message_id'],
+      )!,
+      recipientPeerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}recipient_peer_id'],
+      )!,
+      epoch: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}epoch'],
+      )!,
+      packetType: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}packet_type'],
+      )!,
+      sessionId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}session_id'],
+      ),
+      encryptedEnvelopeJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}encrypted_envelope_json'],
+      )!,
+      status: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}status'],
+      )!,
+      failureReason: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}failure_reason'],
+      ),
+      retryCount: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}retry_count'],
+      )!,
+      nextRetryAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}next_retry_at'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.dateTime,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $GroupDeliveryQueueTableTable createAlias(String alias) {
+    return $GroupDeliveryQueueTableTable(attachedDatabase, alias);
+  }
+}
+
+class GroupDeliveryQueueEntry extends DataClass
+    implements Insertable<GroupDeliveryQueueEntry> {
+  /// Unique queue record auto-incrementing identifier.
+  final int queueId;
+
+  /// Group identifier.
+  final String groupId;
+
+  /// Unique message identifier.
+  final String messageId;
+
+  /// Peer device identifier of recipient.
+  final String recipientPeerId;
+
+  /// Group epoch at the time of encryption.
+  final int epoch;
+
+  /// Packet type discriminator (e.g. group_message).
+  final String packetType;
+
+  /// Active pairwise session identifier (nullable if not yet connected).
+  final String? sessionId;
+
+  /// Recipient-specific encrypted wire envelope JSON (never plaintext message content).
+  final String encryptedEnvelopeJson;
+
+  /// Delivery lifecycle status.
+  final String status;
+
+  /// Failure reason discriminator (nullable).
+  final String? failureReason;
+
+  /// Number of transmission retries attempted.
+  final int retryCount;
+
+  /// Next eligible delivery attempt timestamp (UTC).
+  final DateTime? nextRetryAt;
+
+  /// UTC creation timestamp.
+  final DateTime createdAt;
+
+  /// UTC last updated timestamp.
+  final DateTime updatedAt;
+  const GroupDeliveryQueueEntry({
+    required this.queueId,
+    required this.groupId,
+    required this.messageId,
+    required this.recipientPeerId,
+    required this.epoch,
+    required this.packetType,
+    this.sessionId,
+    required this.encryptedEnvelopeJson,
+    required this.status,
+    this.failureReason,
+    required this.retryCount,
+    this.nextRetryAt,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['queue_id'] = Variable<int>(queueId);
+    map['group_id'] = Variable<String>(groupId);
+    map['message_id'] = Variable<String>(messageId);
+    map['recipient_peer_id'] = Variable<String>(recipientPeerId);
+    map['epoch'] = Variable<int>(epoch);
+    map['packet_type'] = Variable<String>(packetType);
+    if (!nullToAbsent || sessionId != null) {
+      map['session_id'] = Variable<String>(sessionId);
+    }
+    map['encrypted_envelope_json'] = Variable<String>(encryptedEnvelopeJson);
+    map['status'] = Variable<String>(status);
+    if (!nullToAbsent || failureReason != null) {
+      map['failure_reason'] = Variable<String>(failureReason);
+    }
+    map['retry_count'] = Variable<int>(retryCount);
+    if (!nullToAbsent || nextRetryAt != null) {
+      map['next_retry_at'] = Variable<DateTime>(nextRetryAt);
+    }
+    map['created_at'] = Variable<DateTime>(createdAt);
+    map['updated_at'] = Variable<DateTime>(updatedAt);
+    return map;
+  }
+
+  GroupDeliveryQueueTableCompanion toCompanion(bool nullToAbsent) {
+    return GroupDeliveryQueueTableCompanion(
+      queueId: Value(queueId),
+      groupId: Value(groupId),
+      messageId: Value(messageId),
+      recipientPeerId: Value(recipientPeerId),
+      epoch: Value(epoch),
+      packetType: Value(packetType),
+      sessionId: sessionId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(sessionId),
+      encryptedEnvelopeJson: Value(encryptedEnvelopeJson),
+      status: Value(status),
+      failureReason: failureReason == null && nullToAbsent
+          ? const Value.absent()
+          : Value(failureReason),
+      retryCount: Value(retryCount),
+      nextRetryAt: nextRetryAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(nextRetryAt),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory GroupDeliveryQueueEntry.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return GroupDeliveryQueueEntry(
+      queueId: serializer.fromJson<int>(json['queueId']),
+      groupId: serializer.fromJson<String>(json['groupId']),
+      messageId: serializer.fromJson<String>(json['messageId']),
+      recipientPeerId: serializer.fromJson<String>(json['recipientPeerId']),
+      epoch: serializer.fromJson<int>(json['epoch']),
+      packetType: serializer.fromJson<String>(json['packetType']),
+      sessionId: serializer.fromJson<String?>(json['sessionId']),
+      encryptedEnvelopeJson: serializer.fromJson<String>(
+        json['encryptedEnvelopeJson'],
+      ),
+      status: serializer.fromJson<String>(json['status']),
+      failureReason: serializer.fromJson<String?>(json['failureReason']),
+      retryCount: serializer.fromJson<int>(json['retryCount']),
+      nextRetryAt: serializer.fromJson<DateTime?>(json['nextRetryAt']),
+      createdAt: serializer.fromJson<DateTime>(json['createdAt']),
+      updatedAt: serializer.fromJson<DateTime>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'queueId': serializer.toJson<int>(queueId),
+      'groupId': serializer.toJson<String>(groupId),
+      'messageId': serializer.toJson<String>(messageId),
+      'recipientPeerId': serializer.toJson<String>(recipientPeerId),
+      'epoch': serializer.toJson<int>(epoch),
+      'packetType': serializer.toJson<String>(packetType),
+      'sessionId': serializer.toJson<String?>(sessionId),
+      'encryptedEnvelopeJson': serializer.toJson<String>(encryptedEnvelopeJson),
+      'status': serializer.toJson<String>(status),
+      'failureReason': serializer.toJson<String?>(failureReason),
+      'retryCount': serializer.toJson<int>(retryCount),
+      'nextRetryAt': serializer.toJson<DateTime?>(nextRetryAt),
+      'createdAt': serializer.toJson<DateTime>(createdAt),
+      'updatedAt': serializer.toJson<DateTime>(updatedAt),
+    };
+  }
+
+  GroupDeliveryQueueEntry copyWith({
+    int? queueId,
+    String? groupId,
+    String? messageId,
+    String? recipientPeerId,
+    int? epoch,
+    String? packetType,
+    Value<String?> sessionId = const Value.absent(),
+    String? encryptedEnvelopeJson,
+    String? status,
+    Value<String?> failureReason = const Value.absent(),
+    int? retryCount,
+    Value<DateTime?> nextRetryAt = const Value.absent(),
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) => GroupDeliveryQueueEntry(
+    queueId: queueId ?? this.queueId,
+    groupId: groupId ?? this.groupId,
+    messageId: messageId ?? this.messageId,
+    recipientPeerId: recipientPeerId ?? this.recipientPeerId,
+    epoch: epoch ?? this.epoch,
+    packetType: packetType ?? this.packetType,
+    sessionId: sessionId.present ? sessionId.value : this.sessionId,
+    encryptedEnvelopeJson: encryptedEnvelopeJson ?? this.encryptedEnvelopeJson,
+    status: status ?? this.status,
+    failureReason: failureReason.present
+        ? failureReason.value
+        : this.failureReason,
+    retryCount: retryCount ?? this.retryCount,
+    nextRetryAt: nextRetryAt.present ? nextRetryAt.value : this.nextRetryAt,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  GroupDeliveryQueueEntry copyWithCompanion(
+    GroupDeliveryQueueTableCompanion data,
+  ) {
+    return GroupDeliveryQueueEntry(
+      queueId: data.queueId.present ? data.queueId.value : this.queueId,
+      groupId: data.groupId.present ? data.groupId.value : this.groupId,
+      messageId: data.messageId.present ? data.messageId.value : this.messageId,
+      recipientPeerId: data.recipientPeerId.present
+          ? data.recipientPeerId.value
+          : this.recipientPeerId,
+      epoch: data.epoch.present ? data.epoch.value : this.epoch,
+      packetType: data.packetType.present
+          ? data.packetType.value
+          : this.packetType,
+      sessionId: data.sessionId.present ? data.sessionId.value : this.sessionId,
+      encryptedEnvelopeJson: data.encryptedEnvelopeJson.present
+          ? data.encryptedEnvelopeJson.value
+          : this.encryptedEnvelopeJson,
+      status: data.status.present ? data.status.value : this.status,
+      failureReason: data.failureReason.present
+          ? data.failureReason.value
+          : this.failureReason,
+      retryCount: data.retryCount.present
+          ? data.retryCount.value
+          : this.retryCount,
+      nextRetryAt: data.nextRetryAt.present
+          ? data.nextRetryAt.value
+          : this.nextRetryAt,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('GroupDeliveryQueueEntry(')
+          ..write('queueId: $queueId, ')
+          ..write('groupId: $groupId, ')
+          ..write('messageId: $messageId, ')
+          ..write('recipientPeerId: $recipientPeerId, ')
+          ..write('epoch: $epoch, ')
+          ..write('packetType: $packetType, ')
+          ..write('sessionId: $sessionId, ')
+          ..write('encryptedEnvelopeJson: $encryptedEnvelopeJson, ')
+          ..write('status: $status, ')
+          ..write('failureReason: $failureReason, ')
+          ..write('retryCount: $retryCount, ')
+          ..write('nextRetryAt: $nextRetryAt, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    queueId,
+    groupId,
+    messageId,
+    recipientPeerId,
+    epoch,
+    packetType,
+    sessionId,
+    encryptedEnvelopeJson,
+    status,
+    failureReason,
+    retryCount,
+    nextRetryAt,
+    createdAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is GroupDeliveryQueueEntry &&
+          other.queueId == this.queueId &&
+          other.groupId == this.groupId &&
+          other.messageId == this.messageId &&
+          other.recipientPeerId == this.recipientPeerId &&
+          other.epoch == this.epoch &&
+          other.packetType == this.packetType &&
+          other.sessionId == this.sessionId &&
+          other.encryptedEnvelopeJson == this.encryptedEnvelopeJson &&
+          other.status == this.status &&
+          other.failureReason == this.failureReason &&
+          other.retryCount == this.retryCount &&
+          other.nextRetryAt == this.nextRetryAt &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class GroupDeliveryQueueTableCompanion
+    extends UpdateCompanion<GroupDeliveryQueueEntry> {
+  final Value<int> queueId;
+  final Value<String> groupId;
+  final Value<String> messageId;
+  final Value<String> recipientPeerId;
+  final Value<int> epoch;
+  final Value<String> packetType;
+  final Value<String?> sessionId;
+  final Value<String> encryptedEnvelopeJson;
+  final Value<String> status;
+  final Value<String?> failureReason;
+  final Value<int> retryCount;
+  final Value<DateTime?> nextRetryAt;
+  final Value<DateTime> createdAt;
+  final Value<DateTime> updatedAt;
+  const GroupDeliveryQueueTableCompanion({
+    this.queueId = const Value.absent(),
+    this.groupId = const Value.absent(),
+    this.messageId = const Value.absent(),
+    this.recipientPeerId = const Value.absent(),
+    this.epoch = const Value.absent(),
+    this.packetType = const Value.absent(),
+    this.sessionId = const Value.absent(),
+    this.encryptedEnvelopeJson = const Value.absent(),
+    this.status = const Value.absent(),
+    this.failureReason = const Value.absent(),
+    this.retryCount = const Value.absent(),
+    this.nextRetryAt = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+  });
+  GroupDeliveryQueueTableCompanion.insert({
+    this.queueId = const Value.absent(),
+    required String groupId,
+    required String messageId,
+    required String recipientPeerId,
+    required int epoch,
+    required String packetType,
+    this.sessionId = const Value.absent(),
+    required String encryptedEnvelopeJson,
+    this.status = const Value.absent(),
+    this.failureReason = const Value.absent(),
+    this.retryCount = const Value.absent(),
+    this.nextRetryAt = const Value.absent(),
+    required DateTime createdAt,
+    required DateTime updatedAt,
+  }) : groupId = Value(groupId),
+       messageId = Value(messageId),
+       recipientPeerId = Value(recipientPeerId),
+       epoch = Value(epoch),
+       packetType = Value(packetType),
+       encryptedEnvelopeJson = Value(encryptedEnvelopeJson),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt);
+  static Insertable<GroupDeliveryQueueEntry> custom({
+    Expression<int>? queueId,
+    Expression<String>? groupId,
+    Expression<String>? messageId,
+    Expression<String>? recipientPeerId,
+    Expression<int>? epoch,
+    Expression<String>? packetType,
+    Expression<String>? sessionId,
+    Expression<String>? encryptedEnvelopeJson,
+    Expression<String>? status,
+    Expression<String>? failureReason,
+    Expression<int>? retryCount,
+    Expression<DateTime>? nextRetryAt,
+    Expression<DateTime>? createdAt,
+    Expression<DateTime>? updatedAt,
+  }) {
+    return RawValuesInsertable({
+      if (queueId != null) 'queue_id': queueId,
+      if (groupId != null) 'group_id': groupId,
+      if (messageId != null) 'message_id': messageId,
+      if (recipientPeerId != null) 'recipient_peer_id': recipientPeerId,
+      if (epoch != null) 'epoch': epoch,
+      if (packetType != null) 'packet_type': packetType,
+      if (sessionId != null) 'session_id': sessionId,
+      if (encryptedEnvelopeJson != null)
+        'encrypted_envelope_json': encryptedEnvelopeJson,
+      if (status != null) 'status': status,
+      if (failureReason != null) 'failure_reason': failureReason,
+      if (retryCount != null) 'retry_count': retryCount,
+      if (nextRetryAt != null) 'next_retry_at': nextRetryAt,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+    });
+  }
+
+  GroupDeliveryQueueTableCompanion copyWith({
+    Value<int>? queueId,
+    Value<String>? groupId,
+    Value<String>? messageId,
+    Value<String>? recipientPeerId,
+    Value<int>? epoch,
+    Value<String>? packetType,
+    Value<String?>? sessionId,
+    Value<String>? encryptedEnvelopeJson,
+    Value<String>? status,
+    Value<String?>? failureReason,
+    Value<int>? retryCount,
+    Value<DateTime?>? nextRetryAt,
+    Value<DateTime>? createdAt,
+    Value<DateTime>? updatedAt,
+  }) {
+    return GroupDeliveryQueueTableCompanion(
+      queueId: queueId ?? this.queueId,
+      groupId: groupId ?? this.groupId,
+      messageId: messageId ?? this.messageId,
+      recipientPeerId: recipientPeerId ?? this.recipientPeerId,
+      epoch: epoch ?? this.epoch,
+      packetType: packetType ?? this.packetType,
+      sessionId: sessionId ?? this.sessionId,
+      encryptedEnvelopeJson:
+          encryptedEnvelopeJson ?? this.encryptedEnvelopeJson,
+      status: status ?? this.status,
+      failureReason: failureReason ?? this.failureReason,
+      retryCount: retryCount ?? this.retryCount,
+      nextRetryAt: nextRetryAt ?? this.nextRetryAt,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (queueId.present) {
+      map['queue_id'] = Variable<int>(queueId.value);
+    }
+    if (groupId.present) {
+      map['group_id'] = Variable<String>(groupId.value);
+    }
+    if (messageId.present) {
+      map['message_id'] = Variable<String>(messageId.value);
+    }
+    if (recipientPeerId.present) {
+      map['recipient_peer_id'] = Variable<String>(recipientPeerId.value);
+    }
+    if (epoch.present) {
+      map['epoch'] = Variable<int>(epoch.value);
+    }
+    if (packetType.present) {
+      map['packet_type'] = Variable<String>(packetType.value);
+    }
+    if (sessionId.present) {
+      map['session_id'] = Variable<String>(sessionId.value);
+    }
+    if (encryptedEnvelopeJson.present) {
+      map['encrypted_envelope_json'] = Variable<String>(
+        encryptedEnvelopeJson.value,
+      );
+    }
+    if (status.present) {
+      map['status'] = Variable<String>(status.value);
+    }
+    if (failureReason.present) {
+      map['failure_reason'] = Variable<String>(failureReason.value);
+    }
+    if (retryCount.present) {
+      map['retry_count'] = Variable<int>(retryCount.value);
+    }
+    if (nextRetryAt.present) {
+      map['next_retry_at'] = Variable<DateTime>(nextRetryAt.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<DateTime>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<DateTime>(updatedAt.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('GroupDeliveryQueueTableCompanion(')
+          ..write('queueId: $queueId, ')
+          ..write('groupId: $groupId, ')
+          ..write('messageId: $messageId, ')
+          ..write('recipientPeerId: $recipientPeerId, ')
+          ..write('epoch: $epoch, ')
+          ..write('packetType: $packetType, ')
+          ..write('sessionId: $sessionId, ')
+          ..write('encryptedEnvelopeJson: $encryptedEnvelopeJson, ')
+          ..write('status: $status, ')
+          ..write('failureReason: $failureReason, ')
+          ..write('retryCount: $retryCount, ')
+          ..write('nextRetryAt: $nextRetryAt, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -3530,6 +6167,62 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $GroupsTableTable groupsTable = $GroupsTableTable(this);
   late final $GroupMembersTableTable groupMembersTable =
       $GroupMembersTableTable(this);
+  late final $GroupEpochOperationsTableTable groupEpochOperationsTable =
+      $GroupEpochOperationsTableTable(this);
+  late final $GroupEpochSyncTableTable groupEpochSyncTable =
+      $GroupEpochSyncTableTable(this);
+  late final $GroupMessagePayloadsTableTable groupMessagePayloadsTable =
+      $GroupMessagePayloadsTableTable(this);
+  late final $GroupDeliveryQueueTableTable groupDeliveryQueueTable =
+      $GroupDeliveryQueueTableTable(this);
+  late final Index idxEpochOpsGroupId = Index(
+    'idx_epoch_ops_group_id',
+    'CREATE INDEX idx_epoch_ops_group_id ON group_epoch_operations_table (group_id)',
+  );
+  late final Index idxEpochOpsStatus = Index(
+    'idx_epoch_ops_status',
+    'CREATE INDEX idx_epoch_ops_status ON group_epoch_operations_table (operation_status)',
+  );
+  late final Index idxEpochOpsGroupSeq = Index(
+    'idx_epoch_ops_group_seq',
+    'CREATE INDEX idx_epoch_ops_group_seq ON group_epoch_operations_table (group_id, operation_sequence_number)',
+  );
+  late final Index idxEpochSyncGroupMember = Index(
+    'idx_epoch_sync_group_member',
+    'CREATE INDEX idx_epoch_sync_group_member ON group_epoch_sync_table (group_id, member_peer_id)',
+  );
+  late final Index idxEpochSyncPrepare = Index(
+    'idx_epoch_sync_prepare',
+    'CREATE INDEX idx_epoch_sync_prepare ON group_epoch_sync_table (operation_id, prepare_status)',
+  );
+  late final Index idxEpochSyncCommit = Index(
+    'idx_epoch_sync_commit',
+    'CREATE INDEX idx_epoch_sync_commit ON group_epoch_sync_table (operation_id, commit_status)',
+  );
+  late final Index idxEpochSyncFinalize = Index(
+    'idx_epoch_sync_finalize',
+    'CREATE INDEX idx_epoch_sync_finalize ON group_epoch_sync_table (operation_id, finalize_status)',
+  );
+  late final Index idxPayloadsCreatedAt = Index(
+    'idx_payloads_created_at',
+    'CREATE INDEX idx_payloads_created_at ON group_message_payloads_table (created_at)',
+  );
+  late final Index idxPayloadsExpiresAt = Index(
+    'idx_payloads_expires_at',
+    'CREATE INDEX idx_payloads_expires_at ON group_message_payloads_table (expires_at)',
+  );
+  late final Index idxGroupQueueRecipientStatus = Index(
+    'idx_group_queue_recipient_status',
+    'CREATE INDEX idx_group_queue_recipient_status ON group_delivery_queue_table (recipient_peer_id, status)',
+  );
+  late final Index idxGroupQueueGroupEpoch = Index(
+    'idx_group_queue_group_epoch',
+    'CREATE INDEX idx_group_queue_group_epoch ON group_delivery_queue_table (group_id, epoch)',
+  );
+  late final Index idxGroupQueueRetry = Index(
+    'idx_group_queue_retry',
+    'CREATE INDEX idx_group_queue_retry ON group_delivery_queue_table (status, next_retry_at)',
+  );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
       allSchemaEntities.whereType<TableInfo<Table, Object?>>();
@@ -3542,6 +6235,22 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     fileChunksTable,
     groupsTable,
     groupMembersTable,
+    groupEpochOperationsTable,
+    groupEpochSyncTable,
+    groupMessagePayloadsTable,
+    groupDeliveryQueueTable,
+    idxEpochOpsGroupId,
+    idxEpochOpsStatus,
+    idxEpochOpsGroupSeq,
+    idxEpochSyncGroupMember,
+    idxEpochSyncPrepare,
+    idxEpochSyncCommit,
+    idxEpochSyncFinalize,
+    idxPayloadsCreatedAt,
+    idxPayloadsExpiresAt,
+    idxGroupQueueRecipientStatus,
+    idxGroupQueueGroupEpoch,
+    idxGroupQueueRetry,
   ];
   @override
   StreamQueryUpdateRules get streamUpdateRules => const StreamQueryUpdateRules([
@@ -3551,6 +6260,24 @@ abstract class _$AppDatabase extends GeneratedDatabase {
         limitUpdateKind: UpdateKind.delete,
       ),
       result: [TableUpdate('group_members_table', kind: UpdateKind.delete)],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'groups_table',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [
+        TableUpdate('group_epoch_operations_table', kind: UpdateKind.delete),
+      ],
+    ),
+    WritePropagation(
+      on: TableUpdateQuery.onTableName(
+        'groups_table',
+        limitUpdateKind: UpdateKind.delete,
+      ),
+      result: [
+        TableUpdate('group_message_payloads_table', kind: UpdateKind.delete),
+      ],
     ),
   ]);
 }
@@ -4892,6 +7619,10 @@ typedef $$GroupsTableTableCreateCompanionBuilder =
       required String creatorId,
       required String adminId,
       Value<int> epoch,
+      Value<bool> isReEpochPending,
+      Value<String?> activeReEpochOperationId,
+      Value<int?> preparedEpoch,
+      Value<int> operationSequenceNumber,
       required DateTime createdAt,
       required DateTime updatedAt,
       Value<int> rowid,
@@ -4903,6 +7634,10 @@ typedef $$GroupsTableTableUpdateCompanionBuilder =
       Value<String> creatorId,
       Value<String> adminId,
       Value<int> epoch,
+      Value<bool> isReEpochPending,
+      Value<String?> activeReEpochOperationId,
+      Value<int?> preparedEpoch,
+      Value<int> operationSequenceNumber,
       Value<DateTime> createdAt,
       Value<DateTime> updatedAt,
       Value<int> rowid,
@@ -4933,6 +7668,68 @@ final class $$GroupsTableTableReferences
 
     final cache = $_typedResult.readTableOrNull(
       _groupMembersTableRefsTable($_db),
+    );
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<
+    $GroupEpochOperationsTableTable,
+    List<GroupEpochOperationEntry>
+  >
+  _groupEpochOperationsTableRefsTable(_$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(
+        db.groupEpochOperationsTable,
+        aliasName: $_aliasNameGenerator(
+          db.groupsTable.groupId,
+          db.groupEpochOperationsTable.groupId,
+        ),
+      );
+
+  $$GroupEpochOperationsTableTableProcessedTableManager
+  get groupEpochOperationsTableRefs {
+    final manager =
+        $$GroupEpochOperationsTableTableTableManager(
+          $_db,
+          $_db.groupEpochOperationsTable,
+        ).filter(
+          (f) => f.groupId.groupId.sqlEquals($_itemColumn<String>('group_id')!),
+        );
+
+    final cache = $_typedResult.readTableOrNull(
+      _groupEpochOperationsTableRefsTable($_db),
+    );
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<
+    $GroupMessagePayloadsTableTable,
+    List<GroupMessagePayloadEntry>
+  >
+  _groupMessagePayloadsTableRefsTable(_$AppDatabase db) =>
+      MultiTypedResultKey.fromTable(
+        db.groupMessagePayloadsTable,
+        aliasName: $_aliasNameGenerator(
+          db.groupsTable.groupId,
+          db.groupMessagePayloadsTable.groupId,
+        ),
+      );
+
+  $$GroupMessagePayloadsTableTableProcessedTableManager
+  get groupMessagePayloadsTableRefs {
+    final manager =
+        $$GroupMessagePayloadsTableTableTableManager(
+          $_db,
+          $_db.groupMessagePayloadsTable,
+        ).filter(
+          (f) => f.groupId.groupId.sqlEquals($_itemColumn<String>('group_id')!),
+        );
+
+    final cache = $_typedResult.readTableOrNull(
+      _groupMessagePayloadsTableRefsTable($_db),
     );
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: cache),
@@ -4974,6 +7771,26 @@ class $$GroupsTableTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<bool> get isReEpochPending => $composableBuilder(
+    column: $table.isReEpochPending,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get activeReEpochOperationId => $composableBuilder(
+    column: $table.activeReEpochOperationId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get preparedEpoch => $composableBuilder(
+    column: $table.preparedEpoch,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get operationSequenceNumber => $composableBuilder(
+    column: $table.operationSequenceNumber,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
     builder: (column) => ColumnFilters(column),
@@ -5006,6 +7823,60 @@ class $$GroupsTableTableFilterComposer
                 $removeJoinBuilderFromRootComposer,
           ),
     );
+    return f(composer);
+  }
+
+  Expression<bool> groupEpochOperationsTableRefs(
+    Expression<bool> Function($$GroupEpochOperationsTableTableFilterComposer f)
+    f,
+  ) {
+    final $$GroupEpochOperationsTableTableFilterComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.groupId,
+          referencedTable: $db.groupEpochOperationsTable,
+          getReferencedColumn: (t) => t.groupId,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$GroupEpochOperationsTableTableFilterComposer(
+                $db: $db,
+                $table: $db.groupEpochOperationsTable,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return f(composer);
+  }
+
+  Expression<bool> groupMessagePayloadsTableRefs(
+    Expression<bool> Function($$GroupMessagePayloadsTableTableFilterComposer f)
+    f,
+  ) {
+    final $$GroupMessagePayloadsTableTableFilterComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.groupId,
+          referencedTable: $db.groupMessagePayloadsTable,
+          getReferencedColumn: (t) => t.groupId,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$GroupMessagePayloadsTableTableFilterComposer(
+                $db: $db,
+                $table: $db.groupMessagePayloadsTable,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
     return f(composer);
   }
 }
@@ -5044,6 +7915,26 @@ class $$GroupsTableTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<bool> get isReEpochPending => $composableBuilder(
+    column: $table.isReEpochPending,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get activeReEpochOperationId => $composableBuilder(
+    column: $table.activeReEpochOperationId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get preparedEpoch => $composableBuilder(
+    column: $table.preparedEpoch,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get operationSequenceNumber => $composableBuilder(
+    column: $table.operationSequenceNumber,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<DateTime> get createdAt => $composableBuilder(
     column: $table.createdAt,
     builder: (column) => ColumnOrderings(column),
@@ -5079,6 +7970,26 @@ class $$GroupsTableTableAnnotationComposer
   GeneratedColumn<int> get epoch =>
       $composableBuilder(column: $table.epoch, builder: (column) => column);
 
+  GeneratedColumn<bool> get isReEpochPending => $composableBuilder(
+    column: $table.isReEpochPending,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get activeReEpochOperationId => $composableBuilder(
+    column: $table.activeReEpochOperationId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get preparedEpoch => $composableBuilder(
+    column: $table.preparedEpoch,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get operationSequenceNumber => $composableBuilder(
+    column: $table.operationSequenceNumber,
+    builder: (column) => column,
+  );
+
   GeneratedColumn<DateTime> get createdAt =>
       $composableBuilder(column: $table.createdAt, builder: (column) => column);
 
@@ -5110,6 +8021,60 @@ class $$GroupsTableTableAnnotationComposer
         );
     return f(composer);
   }
+
+  Expression<T> groupEpochOperationsTableRefs<T extends Object>(
+    Expression<T> Function($$GroupEpochOperationsTableTableAnnotationComposer a)
+    f,
+  ) {
+    final $$GroupEpochOperationsTableTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.groupId,
+          referencedTable: $db.groupEpochOperationsTable,
+          getReferencedColumn: (t) => t.groupId,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$GroupEpochOperationsTableTableAnnotationComposer(
+                $db: $db,
+                $table: $db.groupEpochOperationsTable,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return f(composer);
+  }
+
+  Expression<T> groupMessagePayloadsTableRefs<T extends Object>(
+    Expression<T> Function($$GroupMessagePayloadsTableTableAnnotationComposer a)
+    f,
+  ) {
+    final $$GroupMessagePayloadsTableTableAnnotationComposer composer =
+        $composerBuilder(
+          composer: this,
+          getCurrentColumn: (t) => t.groupId,
+          referencedTable: $db.groupMessagePayloadsTable,
+          getReferencedColumn: (t) => t.groupId,
+          builder:
+              (
+                joinBuilder, {
+                $addJoinBuilderToRootComposer,
+                $removeJoinBuilderFromRootComposer,
+              }) => $$GroupMessagePayloadsTableTableAnnotationComposer(
+                $db: $db,
+                $table: $db.groupMessagePayloadsTable,
+                $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+                joinBuilder: joinBuilder,
+                $removeJoinBuilderFromRootComposer:
+                    $removeJoinBuilderFromRootComposer,
+              ),
+        );
+    return f(composer);
+  }
 }
 
 class $$GroupsTableTableTableManager
@@ -5125,7 +8090,11 @@ class $$GroupsTableTableTableManager
           $$GroupsTableTableUpdateCompanionBuilder,
           (GroupEntry, $$GroupsTableTableReferences),
           GroupEntry,
-          PrefetchHooks Function({bool groupMembersTableRefs})
+          PrefetchHooks Function({
+            bool groupMembersTableRefs,
+            bool groupEpochOperationsTableRefs,
+            bool groupMessagePayloadsTableRefs,
+          })
         > {
   $$GroupsTableTableTableManager(_$AppDatabase db, $GroupsTableTable table)
     : super(
@@ -5145,6 +8114,10 @@ class $$GroupsTableTableTableManager
                 Value<String> creatorId = const Value.absent(),
                 Value<String> adminId = const Value.absent(),
                 Value<int> epoch = const Value.absent(),
+                Value<bool> isReEpochPending = const Value.absent(),
+                Value<String?> activeReEpochOperationId = const Value.absent(),
+                Value<int?> preparedEpoch = const Value.absent(),
+                Value<int> operationSequenceNumber = const Value.absent(),
                 Value<DateTime> createdAt = const Value.absent(),
                 Value<DateTime> updatedAt = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
@@ -5154,6 +8127,10 @@ class $$GroupsTableTableTableManager
                 creatorId: creatorId,
                 adminId: adminId,
                 epoch: epoch,
+                isReEpochPending: isReEpochPending,
+                activeReEpochOperationId: activeReEpochOperationId,
+                preparedEpoch: preparedEpoch,
+                operationSequenceNumber: operationSequenceNumber,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 rowid: rowid,
@@ -5165,6 +8142,10 @@ class $$GroupsTableTableTableManager
                 required String creatorId,
                 required String adminId,
                 Value<int> epoch = const Value.absent(),
+                Value<bool> isReEpochPending = const Value.absent(),
+                Value<String?> activeReEpochOperationId = const Value.absent(),
+                Value<int?> preparedEpoch = const Value.absent(),
+                Value<int> operationSequenceNumber = const Value.absent(),
                 required DateTime createdAt,
                 required DateTime updatedAt,
                 Value<int> rowid = const Value.absent(),
@@ -5174,6 +8155,10 @@ class $$GroupsTableTableTableManager
                 creatorId: creatorId,
                 adminId: adminId,
                 epoch: epoch,
+                isReEpochPending: isReEpochPending,
+                activeReEpochOperationId: activeReEpochOperationId,
+                preparedEpoch: preparedEpoch,
+                operationSequenceNumber: operationSequenceNumber,
                 createdAt: createdAt,
                 updatedAt: updatedAt,
                 rowid: rowid,
@@ -5186,40 +8171,91 @@ class $$GroupsTableTableTableManager
                 ),
               )
               .toList(),
-          prefetchHooksCallback: ({groupMembersTableRefs = false}) {
-            return PrefetchHooks(
-              db: db,
-              explicitlyWatchedTables: [
-                if (groupMembersTableRefs) db.groupMembersTable,
-              ],
-              addJoins: null,
-              getPrefetchedDataCallback: (items) async {
-                return [
-                  if (groupMembersTableRefs)
-                    await $_getPrefetchedData<
-                      GroupEntry,
-                      $GroupsTableTable,
-                      GroupMemberEntry
-                    >(
-                      currentTable: table,
-                      referencedTable: $$GroupsTableTableReferences
-                          ._groupMembersTableRefsTable(db),
-                      managerFromTypedResult: (p0) =>
-                          $$GroupsTableTableReferences(
-                            db,
-                            table,
-                            p0,
-                          ).groupMembersTableRefs,
-                      referencedItemsForCurrentItem: (item, referencedItems) =>
-                          referencedItems.where(
-                            (e) => e.groupId == item.groupId,
-                          ),
-                      typedResults: items,
-                    ),
-                ];
+          prefetchHooksCallback:
+              ({
+                groupMembersTableRefs = false,
+                groupEpochOperationsTableRefs = false,
+                groupMessagePayloadsTableRefs = false,
+              }) {
+                return PrefetchHooks(
+                  db: db,
+                  explicitlyWatchedTables: [
+                    if (groupMembersTableRefs) db.groupMembersTable,
+                    if (groupEpochOperationsTableRefs)
+                      db.groupEpochOperationsTable,
+                    if (groupMessagePayloadsTableRefs)
+                      db.groupMessagePayloadsTable,
+                  ],
+                  addJoins: null,
+                  getPrefetchedDataCallback: (items) async {
+                    return [
+                      if (groupMembersTableRefs)
+                        await $_getPrefetchedData<
+                          GroupEntry,
+                          $GroupsTableTable,
+                          GroupMemberEntry
+                        >(
+                          currentTable: table,
+                          referencedTable: $$GroupsTableTableReferences
+                              ._groupMembersTableRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$GroupsTableTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).groupMembersTableRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.groupId == item.groupId,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (groupEpochOperationsTableRefs)
+                        await $_getPrefetchedData<
+                          GroupEntry,
+                          $GroupsTableTable,
+                          GroupEpochOperationEntry
+                        >(
+                          currentTable: table,
+                          referencedTable: $$GroupsTableTableReferences
+                              ._groupEpochOperationsTableRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$GroupsTableTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).groupEpochOperationsTableRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.groupId == item.groupId,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (groupMessagePayloadsTableRefs)
+                        await $_getPrefetchedData<
+                          GroupEntry,
+                          $GroupsTableTable,
+                          GroupMessagePayloadEntry
+                        >(
+                          currentTable: table,
+                          referencedTable: $$GroupsTableTableReferences
+                              ._groupMessagePayloadsTableRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$GroupsTableTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).groupMessagePayloadsTableRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.groupId == item.groupId,
+                              ),
+                          typedResults: items,
+                        ),
+                    ];
+                  },
+                );
               },
-            );
-          },
         ),
       );
 }
@@ -5236,7 +8272,11 @@ typedef $$GroupsTableTableProcessedTableManager =
       $$GroupsTableTableUpdateCompanionBuilder,
       (GroupEntry, $$GroupsTableTableReferences),
       GroupEntry,
-      PrefetchHooks Function({bool groupMembersTableRefs})
+      PrefetchHooks Function({
+        bool groupMembersTableRefs,
+        bool groupEpochOperationsTableRefs,
+        bool groupMessagePayloadsTableRefs,
+      })
     >;
 typedef $$GroupMembersTableTableCreateCompanionBuilder =
     GroupMembersTableCompanion Function({
@@ -5595,6 +8635,1448 @@ typedef $$GroupMembersTableTableProcessedTableManager =
       GroupMemberEntry,
       PrefetchHooks Function({bool groupId})
     >;
+typedef $$GroupEpochOperationsTableTableCreateCompanionBuilder =
+    GroupEpochOperationsTableCompanion Function({
+      required String operationId,
+      required String groupId,
+      required int previousEpoch,
+      required int targetEpoch,
+      required int operationSequenceNumber,
+      required String operationStatus,
+      required DateTime createdAt,
+      required DateTime updatedAt,
+      Value<int> rowid,
+    });
+typedef $$GroupEpochOperationsTableTableUpdateCompanionBuilder =
+    GroupEpochOperationsTableCompanion Function({
+      Value<String> operationId,
+      Value<String> groupId,
+      Value<int> previousEpoch,
+      Value<int> targetEpoch,
+      Value<int> operationSequenceNumber,
+      Value<String> operationStatus,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+
+final class $$GroupEpochOperationsTableTableReferences
+    extends
+        BaseReferences<
+          _$AppDatabase,
+          $GroupEpochOperationsTableTable,
+          GroupEpochOperationEntry
+        > {
+  $$GroupEpochOperationsTableTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $GroupsTableTable _groupIdTable(_$AppDatabase db) =>
+      db.groupsTable.createAlias(
+        $_aliasNameGenerator(
+          db.groupEpochOperationsTable.groupId,
+          db.groupsTable.groupId,
+        ),
+      );
+
+  $$GroupsTableTableProcessedTableManager get groupId {
+    final $_column = $_itemColumn<String>('group_id')!;
+
+    final manager = $$GroupsTableTableTableManager(
+      $_db,
+      $_db.groupsTable,
+    ).filter((f) => f.groupId.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_groupIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$GroupEpochOperationsTableTableFilterComposer
+    extends Composer<_$AppDatabase, $GroupEpochOperationsTableTable> {
+  $$GroupEpochOperationsTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get operationId => $composableBuilder(
+    column: $table.operationId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get previousEpoch => $composableBuilder(
+    column: $table.previousEpoch,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get targetEpoch => $composableBuilder(
+    column: $table.targetEpoch,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get operationSequenceNumber => $composableBuilder(
+    column: $table.operationSequenceNumber,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get operationStatus => $composableBuilder(
+    column: $table.operationStatus,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$GroupsTableTableFilterComposer get groupId {
+    final $$GroupsTableTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.groupId,
+      referencedTable: $db.groupsTable,
+      getReferencedColumn: (t) => t.groupId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$GroupsTableTableFilterComposer(
+            $db: $db,
+            $table: $db.groupsTable,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$GroupEpochOperationsTableTableOrderingComposer
+    extends Composer<_$AppDatabase, $GroupEpochOperationsTableTable> {
+  $$GroupEpochOperationsTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get operationId => $composableBuilder(
+    column: $table.operationId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get previousEpoch => $composableBuilder(
+    column: $table.previousEpoch,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get targetEpoch => $composableBuilder(
+    column: $table.targetEpoch,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get operationSequenceNumber => $composableBuilder(
+    column: $table.operationSequenceNumber,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get operationStatus => $composableBuilder(
+    column: $table.operationStatus,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$GroupsTableTableOrderingComposer get groupId {
+    final $$GroupsTableTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.groupId,
+      referencedTable: $db.groupsTable,
+      getReferencedColumn: (t) => t.groupId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$GroupsTableTableOrderingComposer(
+            $db: $db,
+            $table: $db.groupsTable,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$GroupEpochOperationsTableTableAnnotationComposer
+    extends Composer<_$AppDatabase, $GroupEpochOperationsTableTable> {
+  $$GroupEpochOperationsTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get operationId => $composableBuilder(
+    column: $table.operationId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get previousEpoch => $composableBuilder(
+    column: $table.previousEpoch,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get targetEpoch => $composableBuilder(
+    column: $table.targetEpoch,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get operationSequenceNumber => $composableBuilder(
+    column: $table.operationSequenceNumber,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get operationStatus => $composableBuilder(
+    column: $table.operationStatus,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  $$GroupsTableTableAnnotationComposer get groupId {
+    final $$GroupsTableTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.groupId,
+      referencedTable: $db.groupsTable,
+      getReferencedColumn: (t) => t.groupId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$GroupsTableTableAnnotationComposer(
+            $db: $db,
+            $table: $db.groupsTable,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$GroupEpochOperationsTableTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $GroupEpochOperationsTableTable,
+          GroupEpochOperationEntry,
+          $$GroupEpochOperationsTableTableFilterComposer,
+          $$GroupEpochOperationsTableTableOrderingComposer,
+          $$GroupEpochOperationsTableTableAnnotationComposer,
+          $$GroupEpochOperationsTableTableCreateCompanionBuilder,
+          $$GroupEpochOperationsTableTableUpdateCompanionBuilder,
+          (
+            GroupEpochOperationEntry,
+            $$GroupEpochOperationsTableTableReferences,
+          ),
+          GroupEpochOperationEntry,
+          PrefetchHooks Function({bool groupId})
+        > {
+  $$GroupEpochOperationsTableTableTableManager(
+    _$AppDatabase db,
+    $GroupEpochOperationsTableTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$GroupEpochOperationsTableTableFilterComposer(
+                $db: db,
+                $table: table,
+              ),
+          createOrderingComposer: () =>
+              $$GroupEpochOperationsTableTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$GroupEpochOperationsTableTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> operationId = const Value.absent(),
+                Value<String> groupId = const Value.absent(),
+                Value<int> previousEpoch = const Value.absent(),
+                Value<int> targetEpoch = const Value.absent(),
+                Value<int> operationSequenceNumber = const Value.absent(),
+                Value<String> operationStatus = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => GroupEpochOperationsTableCompanion(
+                operationId: operationId,
+                groupId: groupId,
+                previousEpoch: previousEpoch,
+                targetEpoch: targetEpoch,
+                operationSequenceNumber: operationSequenceNumber,
+                operationStatus: operationStatus,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String operationId,
+                required String groupId,
+                required int previousEpoch,
+                required int targetEpoch,
+                required int operationSequenceNumber,
+                required String operationStatus,
+                required DateTime createdAt,
+                required DateTime updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => GroupEpochOperationsTableCompanion.insert(
+                operationId: operationId,
+                groupId: groupId,
+                previousEpoch: previousEpoch,
+                targetEpoch: targetEpoch,
+                operationSequenceNumber: operationSequenceNumber,
+                operationStatus: operationStatus,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$GroupEpochOperationsTableTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({groupId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (groupId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.groupId,
+                                referencedTable:
+                                    $$GroupEpochOperationsTableTableReferences
+                                        ._groupIdTable(db),
+                                referencedColumn:
+                                    $$GroupEpochOperationsTableTableReferences
+                                        ._groupIdTable(db)
+                                        .groupId,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$GroupEpochOperationsTableTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $GroupEpochOperationsTableTable,
+      GroupEpochOperationEntry,
+      $$GroupEpochOperationsTableTableFilterComposer,
+      $$GroupEpochOperationsTableTableOrderingComposer,
+      $$GroupEpochOperationsTableTableAnnotationComposer,
+      $$GroupEpochOperationsTableTableCreateCompanionBuilder,
+      $$GroupEpochOperationsTableTableUpdateCompanionBuilder,
+      (GroupEpochOperationEntry, $$GroupEpochOperationsTableTableReferences),
+      GroupEpochOperationEntry,
+      PrefetchHooks Function({bool groupId})
+    >;
+typedef $$GroupEpochSyncTableTableCreateCompanionBuilder =
+    GroupEpochSyncTableCompanion Function({
+      required String operationId,
+      required String groupId,
+      required String memberPeerId,
+      Value<String> prepareStatus,
+      Value<String> commitStatus,
+      Value<String> finalizeStatus,
+      required DateTime updatedAt,
+      Value<int> rowid,
+    });
+typedef $$GroupEpochSyncTableTableUpdateCompanionBuilder =
+    GroupEpochSyncTableCompanion Function({
+      Value<String> operationId,
+      Value<String> groupId,
+      Value<String> memberPeerId,
+      Value<String> prepareStatus,
+      Value<String> commitStatus,
+      Value<String> finalizeStatus,
+      Value<DateTime> updatedAt,
+      Value<int> rowid,
+    });
+
+class $$GroupEpochSyncTableTableFilterComposer
+    extends Composer<_$AppDatabase, $GroupEpochSyncTableTable> {
+  $$GroupEpochSyncTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get operationId => $composableBuilder(
+    column: $table.operationId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get groupId => $composableBuilder(
+    column: $table.groupId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get memberPeerId => $composableBuilder(
+    column: $table.memberPeerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get prepareStatus => $composableBuilder(
+    column: $table.prepareStatus,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get commitStatus => $composableBuilder(
+    column: $table.commitStatus,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get finalizeStatus => $composableBuilder(
+    column: $table.finalizeStatus,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$GroupEpochSyncTableTableOrderingComposer
+    extends Composer<_$AppDatabase, $GroupEpochSyncTableTable> {
+  $$GroupEpochSyncTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get operationId => $composableBuilder(
+    column: $table.operationId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get groupId => $composableBuilder(
+    column: $table.groupId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get memberPeerId => $composableBuilder(
+    column: $table.memberPeerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get prepareStatus => $composableBuilder(
+    column: $table.prepareStatus,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get commitStatus => $composableBuilder(
+    column: $table.commitStatus,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get finalizeStatus => $composableBuilder(
+    column: $table.finalizeStatus,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$GroupEpochSyncTableTableAnnotationComposer
+    extends Composer<_$AppDatabase, $GroupEpochSyncTableTable> {
+  $$GroupEpochSyncTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get operationId => $composableBuilder(
+    column: $table.operationId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get groupId =>
+      $composableBuilder(column: $table.groupId, builder: (column) => column);
+
+  GeneratedColumn<String> get memberPeerId => $composableBuilder(
+    column: $table.memberPeerId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get prepareStatus => $composableBuilder(
+    column: $table.prepareStatus,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get commitStatus => $composableBuilder(
+    column: $table.commitStatus,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get finalizeStatus => $composableBuilder(
+    column: $table.finalizeStatus,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$GroupEpochSyncTableTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $GroupEpochSyncTableTable,
+          GroupEpochSyncEntry,
+          $$GroupEpochSyncTableTableFilterComposer,
+          $$GroupEpochSyncTableTableOrderingComposer,
+          $$GroupEpochSyncTableTableAnnotationComposer,
+          $$GroupEpochSyncTableTableCreateCompanionBuilder,
+          $$GroupEpochSyncTableTableUpdateCompanionBuilder,
+          (
+            GroupEpochSyncEntry,
+            BaseReferences<
+              _$AppDatabase,
+              $GroupEpochSyncTableTable,
+              GroupEpochSyncEntry
+            >,
+          ),
+          GroupEpochSyncEntry,
+          PrefetchHooks Function()
+        > {
+  $$GroupEpochSyncTableTableTableManager(
+    _$AppDatabase db,
+    $GroupEpochSyncTableTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$GroupEpochSyncTableTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$GroupEpochSyncTableTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$GroupEpochSyncTableTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> operationId = const Value.absent(),
+                Value<String> groupId = const Value.absent(),
+                Value<String> memberPeerId = const Value.absent(),
+                Value<String> prepareStatus = const Value.absent(),
+                Value<String> commitStatus = const Value.absent(),
+                Value<String> finalizeStatus = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => GroupEpochSyncTableCompanion(
+                operationId: operationId,
+                groupId: groupId,
+                memberPeerId: memberPeerId,
+                prepareStatus: prepareStatus,
+                commitStatus: commitStatus,
+                finalizeStatus: finalizeStatus,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String operationId,
+                required String groupId,
+                required String memberPeerId,
+                Value<String> prepareStatus = const Value.absent(),
+                Value<String> commitStatus = const Value.absent(),
+                Value<String> finalizeStatus = const Value.absent(),
+                required DateTime updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => GroupEpochSyncTableCompanion.insert(
+                operationId: operationId,
+                groupId: groupId,
+                memberPeerId: memberPeerId,
+                prepareStatus: prepareStatus,
+                commitStatus: commitStatus,
+                finalizeStatus: finalizeStatus,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$GroupEpochSyncTableTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $GroupEpochSyncTableTable,
+      GroupEpochSyncEntry,
+      $$GroupEpochSyncTableTableFilterComposer,
+      $$GroupEpochSyncTableTableOrderingComposer,
+      $$GroupEpochSyncTableTableAnnotationComposer,
+      $$GroupEpochSyncTableTableCreateCompanionBuilder,
+      $$GroupEpochSyncTableTableUpdateCompanionBuilder,
+      (
+        GroupEpochSyncEntry,
+        BaseReferences<
+          _$AppDatabase,
+          $GroupEpochSyncTableTable,
+          GroupEpochSyncEntry
+        >,
+      ),
+      GroupEpochSyncEntry,
+      PrefetchHooks Function()
+    >;
+typedef $$GroupMessagePayloadsTableTableCreateCompanionBuilder =
+    GroupMessagePayloadsTableCompanion Function({
+      required String groupId,
+      required String messageId,
+      required Uint8List encryptedPayload,
+      required Uint8List nonce,
+      required DateTime createdAt,
+      Value<DateTime?> expiresAt,
+      Value<int> rowid,
+    });
+typedef $$GroupMessagePayloadsTableTableUpdateCompanionBuilder =
+    GroupMessagePayloadsTableCompanion Function({
+      Value<String> groupId,
+      Value<String> messageId,
+      Value<Uint8List> encryptedPayload,
+      Value<Uint8List> nonce,
+      Value<DateTime> createdAt,
+      Value<DateTime?> expiresAt,
+      Value<int> rowid,
+    });
+
+final class $$GroupMessagePayloadsTableTableReferences
+    extends
+        BaseReferences<
+          _$AppDatabase,
+          $GroupMessagePayloadsTableTable,
+          GroupMessagePayloadEntry
+        > {
+  $$GroupMessagePayloadsTableTableReferences(
+    super.$_db,
+    super.$_table,
+    super.$_typedResult,
+  );
+
+  static $GroupsTableTable _groupIdTable(_$AppDatabase db) =>
+      db.groupsTable.createAlias(
+        $_aliasNameGenerator(
+          db.groupMessagePayloadsTable.groupId,
+          db.groupsTable.groupId,
+        ),
+      );
+
+  $$GroupsTableTableProcessedTableManager get groupId {
+    final $_column = $_itemColumn<String>('group_id')!;
+
+    final manager = $$GroupsTableTableTableManager(
+      $_db,
+      $_db.groupsTable,
+    ).filter((f) => f.groupId.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_groupIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$GroupMessagePayloadsTableTableFilterComposer
+    extends Composer<_$AppDatabase, $GroupMessagePayloadsTableTable> {
+  $$GroupMessagePayloadsTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get messageId => $composableBuilder(
+    column: $table.messageId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<Uint8List> get encryptedPayload => $composableBuilder(
+    column: $table.encryptedPayload,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<Uint8List> get nonce => $composableBuilder(
+    column: $table.nonce,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get expiresAt => $composableBuilder(
+    column: $table.expiresAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$GroupsTableTableFilterComposer get groupId {
+    final $$GroupsTableTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.groupId,
+      referencedTable: $db.groupsTable,
+      getReferencedColumn: (t) => t.groupId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$GroupsTableTableFilterComposer(
+            $db: $db,
+            $table: $db.groupsTable,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$GroupMessagePayloadsTableTableOrderingComposer
+    extends Composer<_$AppDatabase, $GroupMessagePayloadsTableTable> {
+  $$GroupMessagePayloadsTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get messageId => $composableBuilder(
+    column: $table.messageId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<Uint8List> get encryptedPayload => $composableBuilder(
+    column: $table.encryptedPayload,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<Uint8List> get nonce => $composableBuilder(
+    column: $table.nonce,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get expiresAt => $composableBuilder(
+    column: $table.expiresAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$GroupsTableTableOrderingComposer get groupId {
+    final $$GroupsTableTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.groupId,
+      referencedTable: $db.groupsTable,
+      getReferencedColumn: (t) => t.groupId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$GroupsTableTableOrderingComposer(
+            $db: $db,
+            $table: $db.groupsTable,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$GroupMessagePayloadsTableTableAnnotationComposer
+    extends Composer<_$AppDatabase, $GroupMessagePayloadsTableTable> {
+  $$GroupMessagePayloadsTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get messageId =>
+      $composableBuilder(column: $table.messageId, builder: (column) => column);
+
+  GeneratedColumn<Uint8List> get encryptedPayload => $composableBuilder(
+    column: $table.encryptedPayload,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<Uint8List> get nonce =>
+      $composableBuilder(column: $table.nonce, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get expiresAt =>
+      $composableBuilder(column: $table.expiresAt, builder: (column) => column);
+
+  $$GroupsTableTableAnnotationComposer get groupId {
+    final $$GroupsTableTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.groupId,
+      referencedTable: $db.groupsTable,
+      getReferencedColumn: (t) => t.groupId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$GroupsTableTableAnnotationComposer(
+            $db: $db,
+            $table: $db.groupsTable,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$GroupMessagePayloadsTableTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $GroupMessagePayloadsTableTable,
+          GroupMessagePayloadEntry,
+          $$GroupMessagePayloadsTableTableFilterComposer,
+          $$GroupMessagePayloadsTableTableOrderingComposer,
+          $$GroupMessagePayloadsTableTableAnnotationComposer,
+          $$GroupMessagePayloadsTableTableCreateCompanionBuilder,
+          $$GroupMessagePayloadsTableTableUpdateCompanionBuilder,
+          (
+            GroupMessagePayloadEntry,
+            $$GroupMessagePayloadsTableTableReferences,
+          ),
+          GroupMessagePayloadEntry,
+          PrefetchHooks Function({bool groupId})
+        > {
+  $$GroupMessagePayloadsTableTableTableManager(
+    _$AppDatabase db,
+    $GroupMessagePayloadsTableTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$GroupMessagePayloadsTableTableFilterComposer(
+                $db: db,
+                $table: table,
+              ),
+          createOrderingComposer: () =>
+              $$GroupMessagePayloadsTableTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$GroupMessagePayloadsTableTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> groupId = const Value.absent(),
+                Value<String> messageId = const Value.absent(),
+                Value<Uint8List> encryptedPayload = const Value.absent(),
+                Value<Uint8List> nonce = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime?> expiresAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => GroupMessagePayloadsTableCompanion(
+                groupId: groupId,
+                messageId: messageId,
+                encryptedPayload: encryptedPayload,
+                nonce: nonce,
+                createdAt: createdAt,
+                expiresAt: expiresAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String groupId,
+                required String messageId,
+                required Uint8List encryptedPayload,
+                required Uint8List nonce,
+                required DateTime createdAt,
+                Value<DateTime?> expiresAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => GroupMessagePayloadsTableCompanion.insert(
+                groupId: groupId,
+                messageId: messageId,
+                encryptedPayload: encryptedPayload,
+                nonce: nonce,
+                createdAt: createdAt,
+                expiresAt: expiresAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$GroupMessagePayloadsTableTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({groupId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (groupId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.groupId,
+                                referencedTable:
+                                    $$GroupMessagePayloadsTableTableReferences
+                                        ._groupIdTable(db),
+                                referencedColumn:
+                                    $$GroupMessagePayloadsTableTableReferences
+                                        ._groupIdTable(db)
+                                        .groupId,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$GroupMessagePayloadsTableTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $GroupMessagePayloadsTableTable,
+      GroupMessagePayloadEntry,
+      $$GroupMessagePayloadsTableTableFilterComposer,
+      $$GroupMessagePayloadsTableTableOrderingComposer,
+      $$GroupMessagePayloadsTableTableAnnotationComposer,
+      $$GroupMessagePayloadsTableTableCreateCompanionBuilder,
+      $$GroupMessagePayloadsTableTableUpdateCompanionBuilder,
+      (GroupMessagePayloadEntry, $$GroupMessagePayloadsTableTableReferences),
+      GroupMessagePayloadEntry,
+      PrefetchHooks Function({bool groupId})
+    >;
+typedef $$GroupDeliveryQueueTableTableCreateCompanionBuilder =
+    GroupDeliveryQueueTableCompanion Function({
+      Value<int> queueId,
+      required String groupId,
+      required String messageId,
+      required String recipientPeerId,
+      required int epoch,
+      required String packetType,
+      Value<String?> sessionId,
+      required String encryptedEnvelopeJson,
+      Value<String> status,
+      Value<String?> failureReason,
+      Value<int> retryCount,
+      Value<DateTime?> nextRetryAt,
+      required DateTime createdAt,
+      required DateTime updatedAt,
+    });
+typedef $$GroupDeliveryQueueTableTableUpdateCompanionBuilder =
+    GroupDeliveryQueueTableCompanion Function({
+      Value<int> queueId,
+      Value<String> groupId,
+      Value<String> messageId,
+      Value<String> recipientPeerId,
+      Value<int> epoch,
+      Value<String> packetType,
+      Value<String?> sessionId,
+      Value<String> encryptedEnvelopeJson,
+      Value<String> status,
+      Value<String?> failureReason,
+      Value<int> retryCount,
+      Value<DateTime?> nextRetryAt,
+      Value<DateTime> createdAt,
+      Value<DateTime> updatedAt,
+    });
+
+class $$GroupDeliveryQueueTableTableFilterComposer
+    extends Composer<_$AppDatabase, $GroupDeliveryQueueTableTable> {
+  $$GroupDeliveryQueueTableTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<int> get queueId => $composableBuilder(
+    column: $table.queueId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get groupId => $composableBuilder(
+    column: $table.groupId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get messageId => $composableBuilder(
+    column: $table.messageId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get recipientPeerId => $composableBuilder(
+    column: $table.recipientPeerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get epoch => $composableBuilder(
+    column: $table.epoch,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get packetType => $composableBuilder(
+    column: $table.packetType,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get sessionId => $composableBuilder(
+    column: $table.sessionId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get encryptedEnvelopeJson => $composableBuilder(
+    column: $table.encryptedEnvelopeJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get failureReason => $composableBuilder(
+    column: $table.failureReason,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get nextRetryAt => $composableBuilder(
+    column: $table.nextRetryAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$GroupDeliveryQueueTableTableOrderingComposer
+    extends Composer<_$AppDatabase, $GroupDeliveryQueueTableTable> {
+  $$GroupDeliveryQueueTableTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<int> get queueId => $composableBuilder(
+    column: $table.queueId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get groupId => $composableBuilder(
+    column: $table.groupId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get messageId => $composableBuilder(
+    column: $table.messageId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get recipientPeerId => $composableBuilder(
+    column: $table.recipientPeerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get epoch => $composableBuilder(
+    column: $table.epoch,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get packetType => $composableBuilder(
+    column: $table.packetType,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get sessionId => $composableBuilder(
+    column: $table.sessionId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get encryptedEnvelopeJson => $composableBuilder(
+    column: $table.encryptedEnvelopeJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get status => $composableBuilder(
+    column: $table.status,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get failureReason => $composableBuilder(
+    column: $table.failureReason,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get nextRetryAt => $composableBuilder(
+    column: $table.nextRetryAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<DateTime> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$GroupDeliveryQueueTableTableAnnotationComposer
+    extends Composer<_$AppDatabase, $GroupDeliveryQueueTableTable> {
+  $$GroupDeliveryQueueTableTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<int> get queueId =>
+      $composableBuilder(column: $table.queueId, builder: (column) => column);
+
+  GeneratedColumn<String> get groupId =>
+      $composableBuilder(column: $table.groupId, builder: (column) => column);
+
+  GeneratedColumn<String> get messageId =>
+      $composableBuilder(column: $table.messageId, builder: (column) => column);
+
+  GeneratedColumn<String> get recipientPeerId => $composableBuilder(
+    column: $table.recipientPeerId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get epoch =>
+      $composableBuilder(column: $table.epoch, builder: (column) => column);
+
+  GeneratedColumn<String> get packetType => $composableBuilder(
+    column: $table.packetType,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get sessionId =>
+      $composableBuilder(column: $table.sessionId, builder: (column) => column);
+
+  GeneratedColumn<String> get encryptedEnvelopeJson => $composableBuilder(
+    column: $table.encryptedEnvelopeJson,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get status =>
+      $composableBuilder(column: $table.status, builder: (column) => column);
+
+  GeneratedColumn<String> get failureReason => $composableBuilder(
+    column: $table.failureReason,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get retryCount => $composableBuilder(
+    column: $table.retryCount,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get nextRetryAt => $composableBuilder(
+    column: $table.nextRetryAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<DateTime> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<DateTime> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$GroupDeliveryQueueTableTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $GroupDeliveryQueueTableTable,
+          GroupDeliveryQueueEntry,
+          $$GroupDeliveryQueueTableTableFilterComposer,
+          $$GroupDeliveryQueueTableTableOrderingComposer,
+          $$GroupDeliveryQueueTableTableAnnotationComposer,
+          $$GroupDeliveryQueueTableTableCreateCompanionBuilder,
+          $$GroupDeliveryQueueTableTableUpdateCompanionBuilder,
+          (
+            GroupDeliveryQueueEntry,
+            BaseReferences<
+              _$AppDatabase,
+              $GroupDeliveryQueueTableTable,
+              GroupDeliveryQueueEntry
+            >,
+          ),
+          GroupDeliveryQueueEntry,
+          PrefetchHooks Function()
+        > {
+  $$GroupDeliveryQueueTableTableTableManager(
+    _$AppDatabase db,
+    $GroupDeliveryQueueTableTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$GroupDeliveryQueueTableTableFilterComposer(
+                $db: db,
+                $table: table,
+              ),
+          createOrderingComposer: () =>
+              $$GroupDeliveryQueueTableTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$GroupDeliveryQueueTableTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<int> queueId = const Value.absent(),
+                Value<String> groupId = const Value.absent(),
+                Value<String> messageId = const Value.absent(),
+                Value<String> recipientPeerId = const Value.absent(),
+                Value<int> epoch = const Value.absent(),
+                Value<String> packetType = const Value.absent(),
+                Value<String?> sessionId = const Value.absent(),
+                Value<String> encryptedEnvelopeJson = const Value.absent(),
+                Value<String> status = const Value.absent(),
+                Value<String?> failureReason = const Value.absent(),
+                Value<int> retryCount = const Value.absent(),
+                Value<DateTime?> nextRetryAt = const Value.absent(),
+                Value<DateTime> createdAt = const Value.absent(),
+                Value<DateTime> updatedAt = const Value.absent(),
+              }) => GroupDeliveryQueueTableCompanion(
+                queueId: queueId,
+                groupId: groupId,
+                messageId: messageId,
+                recipientPeerId: recipientPeerId,
+                epoch: epoch,
+                packetType: packetType,
+                sessionId: sessionId,
+                encryptedEnvelopeJson: encryptedEnvelopeJson,
+                status: status,
+                failureReason: failureReason,
+                retryCount: retryCount,
+                nextRetryAt: nextRetryAt,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+              ),
+          createCompanionCallback:
+              ({
+                Value<int> queueId = const Value.absent(),
+                required String groupId,
+                required String messageId,
+                required String recipientPeerId,
+                required int epoch,
+                required String packetType,
+                Value<String?> sessionId = const Value.absent(),
+                required String encryptedEnvelopeJson,
+                Value<String> status = const Value.absent(),
+                Value<String?> failureReason = const Value.absent(),
+                Value<int> retryCount = const Value.absent(),
+                Value<DateTime?> nextRetryAt = const Value.absent(),
+                required DateTime createdAt,
+                required DateTime updatedAt,
+              }) => GroupDeliveryQueueTableCompanion.insert(
+                queueId: queueId,
+                groupId: groupId,
+                messageId: messageId,
+                recipientPeerId: recipientPeerId,
+                epoch: epoch,
+                packetType: packetType,
+                sessionId: sessionId,
+                encryptedEnvelopeJson: encryptedEnvelopeJson,
+                status: status,
+                failureReason: failureReason,
+                retryCount: retryCount,
+                nextRetryAt: nextRetryAt,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$GroupDeliveryQueueTableTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $GroupDeliveryQueueTableTable,
+      GroupDeliveryQueueEntry,
+      $$GroupDeliveryQueueTableTableFilterComposer,
+      $$GroupDeliveryQueueTableTableOrderingComposer,
+      $$GroupDeliveryQueueTableTableAnnotationComposer,
+      $$GroupDeliveryQueueTableTableCreateCompanionBuilder,
+      $$GroupDeliveryQueueTableTableUpdateCompanionBuilder,
+      (
+        GroupDeliveryQueueEntry,
+        BaseReferences<
+          _$AppDatabase,
+          $GroupDeliveryQueueTableTable,
+          GroupDeliveryQueueEntry
+        >,
+      ),
+      GroupDeliveryQueueEntry,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -5613,4 +10095,21 @@ class $AppDatabaseManager {
       $$GroupsTableTableTableManager(_db, _db.groupsTable);
   $$GroupMembersTableTableTableManager get groupMembersTable =>
       $$GroupMembersTableTableTableManager(_db, _db.groupMembersTable);
+  $$GroupEpochOperationsTableTableTableManager get groupEpochOperationsTable =>
+      $$GroupEpochOperationsTableTableTableManager(
+        _db,
+        _db.groupEpochOperationsTable,
+      );
+  $$GroupEpochSyncTableTableTableManager get groupEpochSyncTable =>
+      $$GroupEpochSyncTableTableTableManager(_db, _db.groupEpochSyncTable);
+  $$GroupMessagePayloadsTableTableTableManager get groupMessagePayloadsTable =>
+      $$GroupMessagePayloadsTableTableTableManager(
+        _db,
+        _db.groupMessagePayloadsTable,
+      );
+  $$GroupDeliveryQueueTableTableTableManager get groupDeliveryQueueTable =>
+      $$GroupDeliveryQueueTableTableTableManager(
+        _db,
+        _db.groupDeliveryQueueTable,
+      );
 }
