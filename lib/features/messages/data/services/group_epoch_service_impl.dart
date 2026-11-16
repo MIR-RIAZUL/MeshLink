@@ -666,7 +666,18 @@ class GroupEpochServiceImpl implements GroupEpochService {
       );
     }
 
-    // 7. Handle reconciliation in a transaction
+    // 7. Sequence collision guard: reject conflicting operation ID at the same sequence
+    if (signedHistory.operationSequenceNumber == localGroup.operationSequenceNumber &&
+        localGroup.activeReEpochOperationId != null &&
+        signedHistory.operationId != localGroup.activeReEpochOperationId) {
+      throw GroupEpochConflictException(
+        'Sequence collision: Authoritative history operation ID "${signedHistory.operationId}" '
+        'conflicts with active local operation ID "${localGroup.activeReEpochOperationId}" '
+        'at sequence number ${localGroup.operationSequenceNumber}.',
+      );
+    }
+
+    // 8. Handle reconciliation in a transaction
     await _db.transaction(() async {
       // Reject superseded operations
       if (signedHistory.operationStatus == GroupEpochOperationStatus.superseded) {

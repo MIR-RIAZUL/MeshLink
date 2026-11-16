@@ -953,6 +953,366 @@ void main() {
           throwsA(isA<GroupEpochReconciliationException>()),
         );
       });
+
+      test('4.4 Reconciling with lower sequence number is strictly rejected without state mutation', () async {
+        // Step 1: Advance admin service to sequence 2
+        final op1 = await epochService.initiateReEpoch(groupId: testGroupId, requestingPeerId: testAdminId);
+        final op2 = await epochService.initiateReEpoch(groupId: testGroupId, requestingPeerId: testAdminId);
+        expect(op2.operationSequenceNumber, 2);
+
+        final initialGroup = await db.getGroup(testGroupId);
+        expect(initialGroup!.operationSequenceNumber, 2);
+        expect(initialGroup.activeReEpochOperationId, op2.operationId);
+        expect(initialGroup.isReEpochPending, isTrue);
+        expect(initialGroup.epoch, 1);
+
+        // History with lower sequence number 1
+        final keyPair = await adminIdentityService.getKeyPair();
+        final lowerSeqHistory = await GroupEpochSignedHistory(
+          groupId: testGroupId,
+          operationId: op1.operationId,
+          previousEpoch: 1,
+          targetEpoch: 2,
+          operationSequenceNumber: 1,
+          adminPeerId: testAdminId,
+          operationStatus: GroupEpochOperationStatus.finalized,
+          timestamp: testTimestamp,
+        ).sign(Ed25519(), keyPair);
+
+        final response = GroupEpochStatusResponsePacket(
+          operationId: op1.operationId,
+          groupId: testGroupId,
+          respondingPeerId: testAdminId,
+          authoritativeEpoch: 2,
+          authoritativeSequenceNumber: 1,
+          operationStatus: GroupEpochOperationStatus.finalized,
+          timestamp: testTimestamp,
+        );
+
+        await expectLater(
+          () => epochService.handleStatusResponse(
+            response: response,
+            signedHistory: lowerSeqHistory,
+            authenticatedSenderPeerId: testAdminId,
+          ),
+          throwsA(isA<GroupEpochReconciliationException>()),
+        );
+
+        // Verify no local group state was changed
+        final groupAfter = await db.getGroup(testGroupId);
+        expect(groupAfter!.epoch, initialGroup.epoch);
+        expect(groupAfter.activeReEpochOperationId, initialGroup.activeReEpochOperationId);
+        expect(groupAfter.operationSequenceNumber, initialGroup.operationSequenceNumber);
+        expect(groupAfter.isReEpochPending, initialGroup.isReEpochPending);
+      });
+
+      test('4.5 Reconciling with equal sequence number but different operation ID throws GroupEpochConflictException', () async {
+        final activeOp = await epochService.initiateReEpoch(groupId: testGroupId, requestingPeerId: testAdminId);
+        expect(activeOp.operationSequenceNumber, 1);
+
+        final initialGroup = await db.getGroup(testGroupId);
+        expect(initialGroup!.activeReEpochOperationId, activeOp.operationId);
+        expect(initialGroup.operationSequenceNumber, 1);
+
+        // Create a different operation ID with the same sequence number (1)
+        const collidingOpId = '0123456789abcdef0123456789abcdef';
+        expect(collidingOpId, isNot(activeOp.operationId));
+
+        final keyPair = await adminIdentityService.getKeyPair();
+        final conflictingHistory = await GroupEpochSignedHistory(
+          groupId: testGroupId,
+          operationId: collidingOpId,
+          previousEpoch: 1,
+          targetEpoch: 2,
+          operationSequenceNumber: 1,
+          adminPeerId: testAdminId,
+          operationStatus: GroupEpochOperationStatus.finalized,
+          timestamp: testTimestamp,
+        ).sign(Ed25519(), keyPair);
+
+        final response = GroupEpochStatusResponsePacket(
+          operationId: collidingOpId,
+          groupId: testGroupId,
+          respondingPeerId: testAdminId,
+          authoritativeEpoch: 2,
+          authoritativeSequenceNumber: 1,
+          operationStatus: GroupEpochOperationStatus.finalized,
+          timestamp: testTimestamp,
+        );
+
+        await expectLater(
+          () => epochService.handleStatusResponse(
+            response: response,
+            signedHistory: conflictingHistory,
+            authenticatedSenderPeerId: testAdminId,
+          ),
+          throwsA(isA<GroupEpochConflictException>()),
+        );
+
+        // Verify local state remains strictly unchanged
+        final groupAfter = await db.getGroup(testGroupId);
+        expect(groupAfter!.epoch, initialGroup.epoch);
+        expect(groupAfter.activeReEpochOperationId, activeOp.operationId);
+        expect(groupAfter.operationSequenceNumber, 1);
+        expect(groupAfter.isReEpochPending, initialGroup.isReEpochPending);
+      });
+
+      test('4.6 Reconciling when administrator public key is missing fails closed without state mutation', () async {
+        final prep = await epochService.initiateReEpoch(groupId: testGroupId, requestingPeerId: testAdminId);
+        final signedHistory = await epochService.getAuthoritativeSignedHistory(testGroupId);
+
+        final response = GroupEpochStatusResponsePacket(
+          operationId: prep.operationId,
+          groupId: testGroupId,
+          respondingPeerId: testAdminId,
+          authoritativeEpoch: 1,
+          authoritativeSequenceNumber: 1,
+          operationStatus: GroupEpochOperationStatus.preparing,
+          timestamp: testTimestamp,
+        );
+
+        // Create isolated member DB without administrator in PeerIdentitiesTable
+        final memberDb = AppDatabase(NativeDatabase.memory());
+        final memberGroupRepo = DriftGroupRepository(memberDb);
+        final memberIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
+        await memberIdentity.initialize();
+
+        final memberService = GroupEpochServiceImpl(
+          db: memberDb,
+          groupRepository: memberGroupRepo,
+          identityService: memberIdentity,
+          localPeerId: testMember1,
+          clock: () => testTimestamp,
+        );
+
+        await memberGroupRepo.createGroup(Group(
+          groupId: testGroupId,
+          name: 'Member Group Without Admin Key',
+          creatorId: testAdminId,
+          adminId: testAdminId,
+          epoch: 1,
+          createdAt: testTimestamp,
+          updatedAt: testTimestamp,
+        ), addCreatorAsMember: false);
+
+        final memberGroupBefore = await memberDb.getGroup(testGroupId);
+
+        await expectLater(
+          () => memberService.handleStatusResponse(
+            response: response,
+            signedHistory: signedHistory,
+            authenticatedSenderPeerId: testAdminId,
+          ),
+          throwsA(isA<GroupEpochSignatureException>()),
+        );
+
+        final memberGroupAfter = await memberDb.getGroup(testGroupId);
+        expect(memberGroupAfter!.epoch, memberGroupBefore!.epoch);
+        expect(memberGroupAfter.isReEpochPending, memberGroupBefore.isReEpochPending);
+        expect(memberGroupAfter.activeReEpochOperationId, memberGroupBefore.activeReEpochOperationId);
+
+        await memberDb.close();
+      });
+
+      test('4.7 Reconciling when administrator identity is marked compromised fails closed without state mutation', () async {
+        final prep = await epochService.initiateReEpoch(groupId: testGroupId, requestingPeerId: testAdminId);
+        final signedHistory = await epochService.getAuthoritativeSignedHistory(testGroupId);
+
+        final response = GroupEpochStatusResponsePacket(
+          operationId: prep.operationId,
+          groupId: testGroupId,
+          respondingPeerId: testAdminId,
+          authoritativeEpoch: 1,
+          authoritativeSequenceNumber: 1,
+          operationStatus: GroupEpochOperationStatus.preparing,
+          timestamp: testTimestamp,
+        );
+
+        // Create isolated member DB with admin marked 'compromised'
+        final memberDb = AppDatabase(NativeDatabase.memory());
+        final memberGroupRepo = DriftGroupRepository(memberDb);
+        final memberIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
+        await memberIdentity.initialize();
+
+        final memberService = GroupEpochServiceImpl(
+          db: memberDb,
+          groupRepository: memberGroupRepo,
+          identityService: memberIdentity,
+          localPeerId: testMember1,
+          clock: () => testTimestamp,
+        );
+
+        await memberGroupRepo.createGroup(Group(
+          groupId: testGroupId,
+          name: 'Member Group Compromised Admin',
+          creatorId: testAdminId,
+          adminId: testAdminId,
+          epoch: 1,
+          createdAt: testTimestamp,
+          updatedAt: testTimestamp,
+        ), addCreatorAsMember: false);
+
+        final adminPubKey = await adminIdentityService.getIdentityPublicKey();
+        await memberDb.savePeerIdentity(PeerIdentitiesTableCompanion(
+          peerId: const drift.Value(testAdminId),
+          identityPublicKey: drift.Value(adminPubKey),
+          safetyNumber: const drift.Value('123456'),
+          trustStatus: const drift.Value('compromised'),
+          firstSeenAt: drift.Value(testTimestamp),
+          lastSeenAt: drift.Value(testTimestamp),
+        ));
+
+        final memberGroupBefore = await memberDb.getGroup(testGroupId);
+
+        await expectLater(
+          () => memberService.handleStatusResponse(
+            response: response,
+            signedHistory: signedHistory,
+            authenticatedSenderPeerId: testAdminId,
+          ),
+          throwsA(isA<GroupEpochSignatureException>()),
+        );
+
+        final memberGroupAfter = await memberDb.getGroup(testGroupId);
+        expect(memberGroupAfter!.epoch, memberGroupBefore!.epoch);
+        expect(memberGroupAfter.isReEpochPending, memberGroupBefore.isReEpochPending);
+        expect(memberGroupAfter.activeReEpochOperationId, memberGroupBefore.activeReEpochOperationId);
+
+        await memberDb.close();
+      });
+
+      test('4.8 Reconciling with ongoing authoritative history (preparing and committing) preserves messaging freeze', () async {
+        // Create member database simulating stale active member
+        final memberDb = AppDatabase(NativeDatabase.memory());
+        final memberGroupRepo = DriftGroupRepository(memberDb);
+        final memberIdentity = MeshIdentityService(store: InMemorySecureIdentityStoreV2());
+        await memberIdentity.initialize();
+
+        final memberService = GroupEpochServiceImpl(
+          db: memberDb,
+          groupRepository: memberGroupRepo,
+          identityService: memberIdentity,
+          localPeerId: testMember1,
+          clock: () => testTimestamp,
+        );
+
+        await memberGroupRepo.createGroup(Group(
+          groupId: testGroupId,
+          name: 'Stale Active Member Group',
+          creatorId: testAdminId,
+          adminId: testAdminId,
+          epoch: 1,
+          createdAt: testTimestamp,
+          updatedAt: testTimestamp,
+        ), addCreatorAsMember: false);
+
+        await memberGroupRepo.addMember(GroupMember(
+          groupId: testGroupId,
+          peerId: testMember1,
+          role: GroupRole.member,
+          status: GroupMemberStatus.active,
+          joinedAt: testTimestamp,
+          invitedBy: testAdminId,
+        ));
+
+        final adminPubKey = await adminIdentityService.getIdentityPublicKey();
+        await memberDb.savePeerIdentity(PeerIdentitiesTableCompanion(
+          peerId: const drift.Value(testAdminId),
+          identityPublicKey: drift.Value(adminPubKey),
+          safetyNumber: const drift.Value('123456'),
+          trustStatus: const drift.Value('verified'),
+          firstSeenAt: drift.Value(testTimestamp),
+          lastSeenAt: drift.Value(testTimestamp),
+        ));
+
+        // Initial check: active member can send messages before re-epoch begins
+        final initialCanSend = await memberService.canSendGroupMessages(testGroupId, testMember1);
+        expect(initialCanSend, isTrue);
+
+        final keyPair = await adminIdentityService.getKeyPair();
+
+        // --- Stage A: Authoritative history is 'preparing' ---
+        const prepOpId = '0123456789abcdef0123456789abcdef';
+        final preparingHistory = await GroupEpochSignedHistory(
+          groupId: testGroupId,
+          operationId: prepOpId,
+          previousEpoch: 1,
+          targetEpoch: 2,
+          operationSequenceNumber: 1,
+          adminPeerId: testAdminId,
+          operationStatus: GroupEpochOperationStatus.preparing,
+          timestamp: testTimestamp,
+        ).sign(Ed25519(), keyPair);
+
+        final prepResponse = GroupEpochStatusResponsePacket(
+          operationId: prepOpId,
+          groupId: testGroupId,
+          respondingPeerId: testAdminId,
+          authoritativeEpoch: 1,
+          authoritativeSequenceNumber: 1,
+          operationStatus: GroupEpochOperationStatus.preparing,
+          targetEpoch: 2,
+          previousEpoch: 1,
+          isReEpochPending: true,
+          timestamp: testTimestamp,
+        );
+
+        await memberService.handleStatusResponse(
+          response: prepResponse,
+          signedHistory: preparingHistory,
+          authenticatedSenderPeerId: testAdminId,
+        );
+
+        final groupAfterPrep = await memberDb.getGroup(testGroupId);
+        expect(groupAfterPrep!.epoch, 1, reason: 'Epoch must NOT advance during preparing');
+        expect(groupAfterPrep.isReEpochPending, isTrue, reason: 'isReEpochPending must be true');
+        expect(groupAfterPrep.activeReEpochOperationId, prepOpId);
+        expect(groupAfterPrep.preparedEpoch, 2);
+
+        final canSendAfterPrep = await memberService.canSendGroupMessages(testGroupId, testMember1);
+        expect(canSendAfterPrep, isFalse, reason: 'Messaging must be frozen during preparing');
+
+        // --- Stage B: Authoritative history advances to 'committing' ---
+        final committingHistory = await GroupEpochSignedHistory(
+          groupId: testGroupId,
+          operationId: prepOpId,
+          previousEpoch: 1,
+          targetEpoch: 2,
+          operationSequenceNumber: 1,
+          adminPeerId: testAdminId,
+          operationStatus: GroupEpochOperationStatus.committing,
+          timestamp: testTimestamp,
+        ).sign(Ed25519(), keyPair);
+
+        final commitResponse = GroupEpochStatusResponsePacket(
+          operationId: prepOpId,
+          groupId: testGroupId,
+          respondingPeerId: testAdminId,
+          authoritativeEpoch: 1,
+          authoritativeSequenceNumber: 1,
+          operationStatus: GroupEpochOperationStatus.committing,
+          targetEpoch: 2,
+          previousEpoch: 1,
+          isReEpochPending: true,
+          timestamp: testTimestamp,
+        );
+
+        await memberService.handleStatusResponse(
+          response: commitResponse,
+          signedHistory: committingHistory,
+          authenticatedSenderPeerId: testAdminId,
+        );
+
+        final groupAfterCommit = await memberDb.getGroup(testGroupId);
+        expect(groupAfterCommit!.epoch, 1, reason: 'Epoch must NOT advance during committing');
+        expect(groupAfterCommit.isReEpochPending, isTrue, reason: 'isReEpochPending must remain true');
+        expect(groupAfterCommit.activeReEpochOperationId, prepOpId);
+
+        final canSendAfterCommit = await memberService.canSendGroupMessages(testGroupId, testMember1);
+        expect(canSendAfterCommit, isFalse, reason: 'Messaging must remain frozen during committing');
+
+        await memberDb.close();
+      });
     });
   });
 }
